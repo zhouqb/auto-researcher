@@ -45,16 +45,44 @@ catalog from day one. Streamlit steering UI + terminal REPL.
 - ADK 2.2 deprecates `SequentialAgent`/`ParallelAgent` in favor of `Workflow`;
   still functional — migrate when touching Phase 3 parallelism.
 
-## Phase 1 — Codex execution (next)
+## Phase 1 — Codex execution ✅ (complete; live E2E validated 2026-06-11)
 
-- `codex_exec` `LongRunningFunctionTool`, **idempotent** (marker/thread-id check
-  before launch — non-negotiable, design §16), `--sandbox workspace-write`
-- `AGENTS.md` workspace contract: `metrics.json`, dual plots (`.vega.json` + `.png`),
-  commit per step, forbidden ops
-- JSONL event parsing (`thread.started`, `item.completed`, `turn.completed` usage)
-- fix loop via `codex exec resume <thread_id>`
-- Gate 2 budget approval (LRFT) + `budget.json` ledger
-- run monitor: tail `codex_events.jsonl` into the UI
+- [x] `codex/runner.py` — `codex exec --json` subprocess driver; JSONL schema
+      verified against codex-cli 0.136; events streamed to
+      `runs/<run_id>/codex_events.jsonl`; **idempotent** via `result.json`
+      marker (run_id = prompt hash → duplicate calls return cached, design §16)
+- [x] `codex/workspace.py` — `AGENTS.md` contract (metrics.json, dual plots,
+      commit per step, forbidden ops) + git init, idempotent
+- [x] `tools/codex.py` — `codex_exec` tool: workspace at
+      `iter_1/exp_main/repo`, `--sandbox workspace-write`, fix loop via
+      `resume_thread_id`, `budget/budget.json` ledger updated per run
+- [x] agents restructured: stages are **AgentTools** on the orchestrator
+      (literature_review, experiment_designer, result_analyst, report_writer)
+      so all gates live in the root chat thread; Gate 2 budget approval before
+      any `codex_exec` call
+- [x] Streamlit run monitor: per-run expander tailing `codex_events.jsonl`
+      (status/commands/files/tokens/metrics, 3s auto-refresh) + budget meter
+- [x] tests: JSONL parser, fake-codex success/idempotency/failure/timeout,
+      workspace prep, experiment flow with budget gate (offline)
+- [x] live E2E (`scripts/live_e2e_experiment.py`, project
+      `demo-qmc-integration`): plan gate → 28-ref literature stage → spec +
+      budget estimate → Gate 2 → real Codex run (150s, ~250k in / 7k out
+      tokens, metrics.json + dual plots + git commits per step) → honest
+      analysis (caught a real flaw in the Halton leaping scheme) → cited
+      report. All 7 exit checks passed.
+
+**Decisions (vs. design doc)**
+- Stages via AgentTool instead of transfer-to-pipeline: gates can't pause a
+  `SequentialAgent` mid-flight without LRFT plumbing; AgentTool keeps the
+  single decision thread and chat-level gates. Cost: sub-agent activity is
+  opaque in the chat stream (AgentTool consumes inner events) — Codex runs
+  stay visible via the file-based run monitor; richer streaming is a Phase 3
+  UI concern.
+- `codex_exec` runs synchronously inside the turn (Phase 1 = single
+  experiment); the jobs queue + LRFT pause/resume arrive with Phase 2
+  resumability.
+- CLI (`codex exec --json`) over the SDK: stable, already authenticated, no
+  extra dependency.
 
 ## Phase 2 — Memory + resumability
 

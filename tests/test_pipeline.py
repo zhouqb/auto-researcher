@@ -67,6 +67,10 @@ def _agent_from_request(llm_request: LlmRequest) -> str:
         return "lit_synthesizer"
     if "final research report" in si:
         return "report_writer"
+    if "code-expressible experiment" in si:
+        return "experiment_designer"
+    if "analyze experiment results" in si:
+        return "result_analyst"
     return "orchestrator"
 
 
@@ -114,12 +118,14 @@ def harness(tmp_path, monkeypatch):
                 lit_facets=["facet one", "facet two"],
             )],
             [_text("Plan saved. Facets: one, two. Approve?")],
-            # turn 3: approval → checkpoint → decision → transfer
+            # turn 3: approval → checkpoint → decision → staged AgentTools
             [_call("record_checkpoint", gate="plan_approval",
                    decision="approved", comments="looks good")],
             [_call("append_decision", context="Gate 1", decision="Plan approved",
                    evidence="plan/plan.md v0")],
-            [_call("transfer_to_agent", agent_name="research_pipeline")],
+            [_call("literature_review", request="run the literature review")],
+            [_call("report_writer", request="write the final report")],
+            [_text("Done. Report at reports/final_report.md")],
         ],
         "lit_searcher_1": [[_notes_call(1)], [_text("Facet one summary; lit/facet_1/notes.md")]],
         "lit_searcher_2": [[_notes_call(2)], [_text("Facet two summary; lit/facet_2/notes.md")]],
@@ -153,6 +159,11 @@ def harness(tmp_path, monkeypatch):
             agent.model = mock
         for sub in agent.sub_agents:
             patch_models(sub)
+        # Stage agents are wrapped as AgentTools, not sub_agents.
+        from google.adk.tools.agent_tool import AgentTool
+        for tool in getattr(agent, "tools", []):
+            if isinstance(tool, AgentTool):
+                patch_models(tool.agent)
 
     patch_models(root)
 
@@ -206,11 +217,14 @@ async def test_full_phase0_flow(harness):
     assert session.state["lit_facets"] == ["facet one", "facet two"]
     assert session.state["facet_3"] == ""
 
-    # Turn 3: approval → checkpoint, decision log, pipeline through report
+    # Turn 3: approval → checkpoint, decision log, staged tools through report
     events = await _send(runner, "approve")
-    authors = {ev.author for ev in events}
-    assert {"lit_searcher_1", "lit_searcher_2", "lit_searcher_3",
-            "lit_synthesizer", "report_writer"} <= authors
+    called = [
+        p.function_call.name
+        for ev in events if ev.content and ev.content.parts
+        for p in ev.content.parts if p.function_call
+    ]
+    assert "literature_review" in called and "report_writer" in called
 
     paths = catalog.list_paths(project_id="proj-test")
     assert "lit/facet_1/notes.md" in paths
@@ -231,4 +245,96 @@ async def test_full_phase0_flow(harness):
     assert (proj_dir / "brief/research_brief.md").exists()
 
     # All scripted responses were consumed (every agent ran exactly as planned)
+    assert all(not q for q in SCRIPTS.values())
+
+
+async def test_experiment_flow_with_budget_gate(harness, tmp_path, monkeypatch):
+    """Gate 2 → codex_exec (fake binary) → result_analyst, budget ledger updated."""
+    import os, stat
+
+    runner, catalog, settings = harness
+    await runner.session_service.create_session(
+        app_name=settings.app_name, user_id="local", session_id="proj-exp"
+    )
+
+    fake = tmp_path / "fake_codex"
+    fake.write_text("""#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -C) WS="$2"; shift 2;;
+    -o) OUT="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+echo '{"type":"thread.started","thread_id":"t-exp-1"}'
+echo '{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"ran"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":1000,"output_tokens":50}}'
+echo '{"metric": "rmse", "value": 0.42, "baseline": 0.5}' > "$WS/metrics.json"
+echo "Experiment finished." > "$OUT"
+""")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("CODEX_BINARY", str(fake))
+
+    SCRIPTS.clear()
+    SCRIPTS.update({
+        "orchestrator": [
+            # turn 1: design + gate 2
+            [_call("experiment_designer", request="design the experiment")],
+            [_text("Spec ready. Estimated 2 min / ~50k tokens. Approve the budget?")],
+            # turn 2: approval → checkpoint → run → analysis → done
+            [_call("record_checkpoint", gate="budget_approval",
+                   decision="approved", comments="go")],
+            [_call("codex_exec", task_prompt="Implement and run the experiment per spec.")],
+            [_call("result_analyst", request="analyze run (see latest run_id)")],
+            [_text("Experiment supported the hypothesis. See iter_1/analysis.md")],
+        ],
+        "experiment_designer": [
+            [_call(
+                "write_artifact", filename="iter_1/exp_spec.md",
+                content="# Spec\nHypothesis...\n## Codex task prompt\nDo X.",
+                kind="exp_spec", title="Experiment spec", summary="Spec v0",
+            )],
+            [_text("Spec saved; est. 2 min, ~50k tokens; iter_1/exp_spec.md")],
+        ],
+        "result_analyst": [
+            [_call("read_artifact", filename="iter_1/exp_spec.md")],
+            [_call(
+                "write_artifact", filename="iter_1/analysis.md",
+                content="# Analysis\nrmse 0.42 beats baseline 0.5. Supported.",
+                kind="analysis", title="Analysis", summary="Hypothesis supported",
+            )],
+            [_text("Analysis saved; iter_1/analysis.md")],
+        ],
+    })
+
+    await _send(runner, "design and run the experiment", session_id="proj-exp")
+    events = await _send(runner, "approve the budget", session_id="proj-exp")
+
+    # codex_exec ran and returned parsed metrics
+    responses = [
+        p.function_response.response
+        for ev in events if ev.content and ev.content.parts
+        for p in ev.content.parts
+        if p.function_response and p.function_response.name == "codex_exec"
+    ]
+    assert responses and responses[0]["status"] == "completed"
+    assert responses[0]["metrics"]["value"] == 0.42
+    assert responses[0]["thread_id"] == "t-exp-1"
+
+    paths = catalog.list_paths(project_id="proj-exp")
+    assert "iter_1/exp_spec.md" in paths and "iter_1/analysis.md" in paths
+    assert "budget/budget.json" in paths
+    assert any(p.startswith("iter_1/exp_main/runs/") for p in paths)
+    assert any(p.endswith("_budget_approval.json") for p in paths)
+
+    import json as _json
+    budget = _json.loads(
+        (settings.projects_dir / "proj-exp" / "budget/budget.json").read_text()
+    )
+    assert budget["totals"]["input_tokens"] == 1000
+    assert len(budget["entries"]) == 1
+
+    # workspace prepared with the AGENTS.md contract + git repo
+    ws = settings.projects_dir / "proj-exp" / "iter_1/exp_main/repo"
+    assert (ws / "AGENTS.md").exists() and (ws / ".git").exists()
     assert all(not q for q in SCRIPTS.values())

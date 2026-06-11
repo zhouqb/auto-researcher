@@ -20,6 +20,7 @@ from deep_researcher.runner import (
     run_turn,
     slugify,
 )
+from deep_researcher.monitor import list_runs, load_budget
 from deep_researcher.storage import ArtifactCatalog
 
 st.set_page_config(page_title="Deep Researcher", layout="wide")
@@ -143,19 +144,62 @@ with chat_col:
                 status.update(label=f"Error: {e}", state="error")
         st.rerun()
 
+@st.fragment(run_every="3s")
+def run_monitor(pid: str) -> None:
+    """Live per-run view tailing codex_events.jsonl (design §12 run monitor)."""
+    runs = list_runs(pid)
+    budget = load_budget(pid)
+    if budget and budget.get("totals"):
+        t = budget["totals"]
+        st.caption(
+            f"**Budget** — runs: {len(budget['entries'])} · "
+            f"in: {t.get('input_tokens', 0):,} tok · "
+            f"out: {t.get('output_tokens', 0):,} tok · "
+            f"wallclock: {t.get('wallclock_s', 0)}s"
+        )
+    if not runs:
+        st.caption("No experiment runs yet.")
+        return
+    icons = {"running": "🟡", "completed": "🟢", "failed": "🔴", "timeout": "🟠"}
+    for run in runs:
+        head = (
+            f"{icons.get(run.status, '⚪')} `{run.experiment}` run "
+            f"`{run.run_id}` — **{run.status}**"
+        )
+        with st.expander(head, expanded=(run.status == "running")):
+            if run.usage:
+                st.caption(
+                    f"tokens in/out: {run.usage.get('input_tokens', 0):,}/"
+                    f"{run.usage.get('output_tokens', 0):,} · "
+                    f"{run.wallclock_s}s · thread `{run.thread_id}`"
+                )
+            if run.metrics:
+                st.json(run.metrics)
+            for cmd in run.commands[-8:]:
+                st.code(cmd, language="bash")
+            if run.files_changed:
+                st.caption("files: " + ", ".join(run.files_changed[-10:]))
+            if run.last_message:
+                st.markdown(run.last_message)
+
+
 with view_col:
+    monitor_tab, artifact_tab = st.tabs(["🖥 Runs", "📄 Artifact"])
+    with monitor_tab:
+        run_monitor(project_id)
     path = st.session_state.get("view_artifact")
-    if path:
-        st.subheader(path)
-        file = settings.projects_dir / project_id / path
-        if not file.exists():
-            st.warning("File not found on disk.")
-        elif path.endswith((".png", ".jpg", ".jpeg", ".gif")):
-            st.image(str(file))
-        elif path.endswith(".json"):
-            st.json(json.loads(file.read_text()))
+    with artifact_tab:
+        if path:
+            st.subheader(path)
+            file = settings.projects_dir / project_id / path
+            if not file.exists():
+                st.warning("File not found on disk.")
+            elif path.endswith((".png", ".jpg", ".jpeg", ".gif")):
+                st.image(str(file))
+            elif path.endswith(".json"):
+                st.json(json.loads(file.read_text()))
+            else:
+                st.markdown(file.read_text())
+            st.download_button("Download", file.read_bytes(), file_name=file.name)
         else:
-            st.markdown(file.read_text())
-        st.download_button("Download", file.read_bytes(), file_name=file.name)
-    else:
-        st.caption("Select an artifact in the sidebar to view it here.")
+            st.caption("Select an artifact in the sidebar to view it here.")
