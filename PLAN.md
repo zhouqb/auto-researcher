@@ -111,11 +111,42 @@ catalog from day one. Streamlit steering UI + terminal REPL.
 - ADK marks ResumabilityConfig/EventsCompactionConfig experimental — pinned
   google-adk 2.2.0 in uv.lock; re-verify on upgrades.
 
-## Phase 3 — Parallel exploration + full UI
+## Phase 3a — Parallel experiment branches ✅ (complete; live E2E 2026-06-11)
 
-- experiment branch fan-out, Elo/LLM-judge tournament, metric pruning (AIDE/MLE-STAR)
-- concurrency + budget knobs; mid-run review gate (Gate 3)
-- Next.js + AG-UI app (lineage click-through, board drag, budget meter)
+- [x] `storage/jobs.py` — jobs table shared across processes (agent registers
+      pid/pgid; UI reads + kills); kill-branch SIGTERMs one branch's process
+      group without touching siblings (design §11.2)
+- [x] `run_experiments` tool — N branches concurrently, capped by
+      `max_codex_concurrency` (default 2); per-branch isolated workspaces
+      `iter_1/exp_<branch>/`; aggregated budget entries; `codex_exec` keeps
+      single-branch + fix-loop duty (`branch_id`, `resume_thread_id`)
+- [x] idea tournament — ParallelAgent of 3 personas (conservative / novel /
+      efficient) → LLM-judge pairwise ranking → `iter_1/hypotheses.json`
+      (co-scientist Generation+Ranking analog, sized for a local stack)
+- [x] result_analyst upgraded to cross-branch comparison: shared-metric
+      ranking, AIDE-style pruning of failed branches, refinement
+      recommendation for the winner
+- [x] orchestrator workflow: breadth decision (single vs. tournament+branches),
+      Gate 2 over the TOTAL budget, parallel launch, per-branch fix loop,
+      one experience record PER BRANCH
+- [x] Streamlit: kill-branch button on running runs; killed status surfaced
+- [x] tests: parallel fan-out with concurrency-cap gauge, input validation,
+      jobs kill semantics, real-process kill-branch (25 tests total)
+- [x] live E2E (`scripts/live_e2e_parallel.py`, project `demo-gradfree-opt`):
+      3 real Codex branches in parallel (RS/SA/ES on Rosenbrock+Rastrigin,
+      shared metric, ~8 min, ~980k in / 22k out tokens), cross-branch ranking
+      (SA won Rosenbrock by ~3 orders of magnitude), 3 experience records
+      incl. one failure, 30-ref report. Tournament validated in a follow-up
+      turn (orchestrator initially skipped it because the user message also
+      prescribed the branch split — instruction now makes explicit user
+      requests override that judgment).
+
+**Deferred to Phase 3b (UI) / later**
+- Next.js + AG-UI app (lineage click-through, board drag, budget meter,
+  live sub-agent event streaming)
+- Gate 3 mid-run review (needs async jobs decoupled from the chat turn)
+- Elo numbers on the tournament (pairwise judge ranking suffices at N≤6
+  candidates; Elo earns its keep with evolution rounds)
 
 ## Phase 4 — Hardening
 

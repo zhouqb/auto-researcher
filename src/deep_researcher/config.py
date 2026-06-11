@@ -39,9 +39,11 @@ class Settings(BaseSettings):
     codex_model: Optional[str] = None  # None → Codex CLI default
     codex_timeout_s: float = 3600
 
-    # Steering knobs (design §4).
+    # Steering knobs (design §4). Default small; escalate only on promise.
     max_clarifying_questions: int = 3
     max_lit_facets: int = 3
+    max_experiment_branches: int = 3
+    max_codex_concurrency: int = 2
 
     # Context compaction (design §6): summarize every N events, keep overlap.
     compaction_interval: int = 40

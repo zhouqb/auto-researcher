@@ -109,6 +109,7 @@ async def run_codex(
     model: Optional[str] = None,
     resume_thread_id: Optional[str] = None,
     timeout_s: float = 3600,
+    on_spawn=None,  # Callable[[pid, pgid], None] — lets the jobs table track the process
 ) -> CodexRunResult:
     """Run one non-interactive Codex turn, sandboxed to the workspace."""
     cached = read_cached_result(run_dir)
@@ -142,6 +143,11 @@ async def run_codex(
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,  # own process group → clean kill on timeout
     )
+    if on_spawn is not None:
+        try:
+            on_spawn(proc.pid, os.getpgid(proc.pid))
+        except ProcessLookupError:
+            pass
 
     async def _consume() -> None:
         with events_path.open("a") as sink:
@@ -171,8 +177,12 @@ async def run_codex(
         stderr_tail = (await proc.stderr.read()).decode("utf-8", errors="replace")[-2000:]
 
     if status == "completed" and (proc.returncode != 0 or acc.turn_failed):
-        status = "failed"
-        error = acc.error or stderr_tail.strip()[-500:] or f"exit code {proc.returncode}"
+        if proc.returncode in (-signal.SIGTERM, -signal.SIGKILL):
+            status = "killed"
+            error = "Run was killed (kill-branch or shutdown)."
+        else:
+            status = "failed"
+            error = acc.error or stderr_tail.strip()[-500:] or f"exit code {proc.returncode}"
 
     final_message = None
     if last_msg_path.exists():
