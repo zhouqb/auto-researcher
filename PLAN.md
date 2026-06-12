@@ -3,7 +3,7 @@
 Implements [docs/design.md](docs/design.md) (Deep Researcher v3) phase by phase.
 Deviations from the design doc are listed per phase under **Decisions**.
 
-## Phase 0 — Skeleton ✅ (code complete; live E2E pending API key)
+## Phase 0 — Skeleton ✅ (complete; live E2E validated 2026-06-11)
 
 Pipeline: clarify (≤3 questions) → `brief/research_brief.md` → plan + facets →
 **Gate 1 plan approval (chat)** → parallel literature searchers → synthesis →
@@ -28,7 +28,10 @@ catalog from day one. Streamlit steering UI + terminal REPL.
       approve/revise gate buttons, artifact browser pane
 - [x] tests: storage round-trip/versioning/lineage/FTS, literature parsers,
       full-pipeline offline integration test with a scripted mock LLM
-- [ ] **live end-to-end run** — blocked on `DEEPSEEK_API_KEY` in `~/.env`
+- [x] live end-to-end run (`scripts/live_e2e.py`, project `demo-moe-routing`):
+      clarify → plan approval → 3 parallel searchers (~20 live searches) →
+      synthesis of 25 papers → 26KB cited report with KaTeX math, ~4 min,
+      zero DeepSeek tool-call parse failures
 
 **Decisions (vs. design doc)**
 - DeepSeek via LiteLLM instead of Gemini (user decision). Mitigation for
