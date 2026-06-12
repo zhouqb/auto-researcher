@@ -98,13 +98,27 @@ click-through):
 ./scripts/dev.sh   # backend + frontend, auto-reload on code changes, Ctrl+C stops both
 ```
 
-The UI prints its URL (usually http://localhost:3001 — Langfuse holds 3000).
+The UI runs on http://localhost:3001 (pinned; Langfuse holds 3000).
 Or run the two halves in separate terminals:
 
 ```sh
 uv run uvicorn deep_researcher.gateway:app --port 8042 --reload --reload-dir src
 cd ui && npm run dev
 ```
+
+**Friendly names** (optional): a local Caddy proxy serves
+http://researcher.localhost and http://langfuse.localhost — no port numbers.
+One-time setup (macOS resolves `*.localhost` to loopback natively):
+
+```sh
+brew install caddy
+cp scripts/Caddyfile "$(brew --prefix)/etc/Caddyfile"
+brew services start caddy   # always-on, survives reboots
+```
+
+For clean Langfuse logins under the new name, set
+`NEXTAUTH_URL=http://langfuse.localhost` in the Langfuse deployment's `.env`
+and recreate its `langfuse-web` container.
 
 **Streamlit** (single-page fallback — chat, gate buttons, runs, board,
 artifacts):

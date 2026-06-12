@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // dev access through the local Caddy proxy (see scripts/Caddyfile)
+  allowedDevOrigins: ["researcher.localhost"],
 };
 
 export default nextConfig;
