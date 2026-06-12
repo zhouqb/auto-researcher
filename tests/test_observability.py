@@ -107,3 +107,45 @@ async def test_adk_spans_flow_through_configured_provider(tmp_path):
     assert names, "ADK should emit spans once a tracer provider is configured"
     assert any("orchestrator" in n or "call_llm" in n or "invocation" in n
                for n in names), names
+
+
+def test_attribute_rewriter_fixes_adk_defaults():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    sink = InMemorySpanExporter()
+    rewriter_cls = obs.make_attribute_rewriter("deepseek")
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(rewriter_cls(sink)))
+    tracer = provider.get_tracer("gcp.vertex.agent")
+
+    # span the way ADK emits it: gemini system + gcp.vertex.agent.* keys
+    with tracer.start_as_current_span("call_llm") as span:
+        span.set_attribute("gen_ai.system", "gemini")
+        span.set_attribute("gen_ai.request.model", "deepseek/deepseek-chat")
+        span.set_attribute("gcp.vertex.agent.invocation_id", "inv-1")
+        span.set_attribute("gcp.vertex.agent.session_id", "proj-x")
+        span.set_attribute("gen_ai.usage.input_tokens", 12)
+    # span with no model attribute falls back to the configured default
+    with tracer.start_as_current_span("agent_run") as span:
+        span.set_attribute("gen_ai.system", "vertex_ai")
+
+    exported = sink.get_finished_spans()
+    a0 = dict(exported[0].attributes)
+    assert a0["gen_ai.system"] == "deepseek"
+    assert a0["adk.invocation_id"] == "inv-1"
+    assert a0["adk.session_id"] == "proj-x"
+    assert "gcp.vertex.agent.invocation_id" not in a0
+    assert a0["gen_ai.usage.input_tokens"] == 12  # untouched keys survive
+    assert dict(exported[1].attributes)["gen_ai.system"] == "deepseek"
+    assert exported[0].instrumentation_scope.name == "deep_researcher"
+
+
+def test_provider_from_model():
+    assert obs.provider_from_model("deepseek/deepseek-chat") == "deepseek"
+    assert obs.provider_from_model("openai/gpt-5") == "openai"
+    assert obs.provider_from_model("gemini-2.5-pro") is None
+    assert obs.provider_from_model(None) is None
