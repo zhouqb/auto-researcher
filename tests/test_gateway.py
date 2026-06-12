@@ -158,3 +158,28 @@ async def test_resume_endpoint_guards(tmp_path, monkeypatch):
         r = await c.post("/api/projects/nope/resume")
         assert r.status_code == 404
     config_mod.get_settings.cache_clear()
+
+
+def test_cors_allows_any_localhost_port(client):
+    """Next.js auto-bumps to 3001+ when Langfuse holds 3000 (regression)."""
+    c, _ = client
+    for origin in ("http://localhost:3001", "http://127.0.0.1:4567"):
+        r = c.options(
+            "/api/projects",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert r.status_code == 200
+        assert r.headers["access-control-allow-origin"] == origin
+    # non-localhost origins stay rejected
+    r = c.options(
+        "/api/projects",
+        headers={
+            "Origin": "http://evil.example:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert "access-control-allow-origin" not in r.headers
