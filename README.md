@@ -27,7 +27,7 @@ plan + literature facets ──► plan.md, board.json
    │
    ▼ ❶ GATE: you approve the plan
    │
-parallel literature searchers (OpenAlex / arXiv / GitHub by default)
+parallel literature searchers (Semantic Scholar / arXiv / OpenAlex / GitHub)
    ──► lit/facet_*/notes.md ──► lit/synthesis.md
    │
    ▼ (if an experiment is in scope)
@@ -59,7 +59,7 @@ recorded (`checkpoints/`, `decisions.md`).
 | Orchestration | Google ADK (LoopAgent/ParallelAgent, sessions, resumability) |
 | Models | DeepSeek via LiteLLM (`deepseek/deepseek-chat`; swappable in config) |
 | Code experiments | OpenAI Codex CLI, `--sandbox workspace-write`, via your ChatGPT login |
-| Literature search | OpenAlex (primary), arXiv, GitHub (implementations) on by default; OpenReview (peer-review signal), Tavily web search (needs key), Semantic Scholar (rate-limited without key) opt-in via `SEARCH_TOOLS` |
+| Literature search | Semantic Scholar (primary; key recommended), arXiv, OpenAlex (keyless secondary), GitHub (implementations) on by default; OpenReview (peer-review signal) and Tavily web search (needs key) opt-in via `SEARCH_TOOLS` |
 | State | One SQLite file + plain files under `DATA_ROOT` — backup = copy a folder |
 | UI | Next.js + AG-UI/CopilotKit (full) · Streamlit (lightweight) · CLI |
 
@@ -83,7 +83,7 @@ Add keys to `~/.env`, a project-local `.env`, or your shell profile:
 DEEPSEEK_API_KEY=sk-...          # required — drives all agents
 TAVILY_API_KEY=tvly-...          # optional: web search key (also add "web" to SEARCH_TOOLS)
 GITHUB_TOKEN=ghp_...             # optional: raises GitHub search limits (else falls back to `gh auth token`)
-SEMANTIC_SCHOLAR_API_KEY=...     # optional: unlocks S2 search (unauth pool is heavily rate-limited)
+SEMANTIC_SCHOLAR_API_KEY=...     # recommended: S2 is the primary paper index (unauth pool 429s heavily)
 OPENALEX_MAILTO=you@example.com  # optional: OpenAlex "polite pool" (faster, more reliable)
 NOTIFY_WEBHOOK_URL=https://...   # optional: Slack-style webhook on run completion
 ```
@@ -198,7 +198,7 @@ All settings are env vars (or `.env` entries); defaults in
 | `ORCHESTRATOR_MODEL` / `WORKER_MODEL` | `deepseek/deepseek-chat` | LiteLLM model ids |
 | `CODEX_MODEL` | Codex CLI default | model for experiment runs |
 | `CODEX_TIMEOUT_S` | `3600` | per-run wallclock cap |
-| `SEARCH_TOOLS` | `openalex,arxiv,github` | enabled search backends (also available: `semantic_scholar`, `openreview`, `web`) |
+| `SEARCH_TOOLS` | `semantic_scholar,arxiv,openalex,github` | enabled search backends (also available: `openreview`, `web`) |
 | `MAX_LIT_FACETS` | `3` | parallel literature searchers |
 | `MAX_EXPERIMENT_BRANCHES` | `3` | parallel experiment branches |
 | `MAX_CODEX_CONCURRENCY` | `2` | concurrent Codex processes |

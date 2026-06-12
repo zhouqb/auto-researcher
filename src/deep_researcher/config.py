@@ -28,10 +28,11 @@ class Settings(BaseSettings):
     worker_model: str = "deepseek/deepseek-chat"
 
     # Search backends handed to agents (comma-separated subset of: openalex,
-    # arxiv, semantic_scholar, openreview, github, web). Default is the lean
-    # keyless trio; semantic_scholar (429s without a key), openreview, and
-    # web (needs TAVILY_API_KEY) are opt-in.
-    search_tools: str = "openalex,arxiv,github"
+    # arxiv, semantic_scholar, openreview, github, web). Semantic Scholar is
+    # primary — better relevance/recency on ML topics (needs an API key to
+    # avoid 429s); OpenAlex is the keyless secondary. openreview and web
+    # (needs TAVILY_API_KEY) are opt-in.
+    search_tools: str = "semantic_scholar,arxiv,openalex,github"
 
     # Optional: raises Semantic Scholar rate limits when present.
     semantic_scholar_api_key: Optional[str] = None
