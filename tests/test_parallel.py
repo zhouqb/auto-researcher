@@ -208,3 +208,62 @@ async def test_kill_branch_terminates_real_process(env, monkeypatch, tmp_path):
     result = await asyncio.wait_for(task, timeout=10)
     assert result["status"] == "killed"
     assert store.get(jobs[0].job_id).status == "killed"
+
+
+async def test_legacy_run_marker_honored(env, monkeypatch, tmp_path):
+    """Pre-3a markers (no branch in the hash) must still produce cache hits."""
+    import hashlib, json
+    settings, _ = env
+    _install_fake_codex(tmp_path, monkeypatch, sleep_s=0)
+    from deep_researcher.tools.codex import codex_exec
+
+    class FakeCtx:
+        agent_name = "test"
+        class session:
+            id = "proj-legacy"
+
+        @staticmethod
+        async def load_artifact(*a, **k):
+            return None
+
+        @staticmethod
+        async def save_artifact(*a, **k):
+            return 0
+
+    prompt = "run the legacy experiment"
+    legacy_id = hashlib.sha1(f"{prompt}|".encode()).hexdigest()[:10]
+    legacy_dir = (settings.projects_dir / "proj-legacy" / "iter_1" / "exp_main"
+                  / "runs" / legacy_id)
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "result.json").write_text(json.dumps({
+        "status": "completed", "run_id": legacy_id, "thread_id": "t-old",
+        "final_message": "done before", "metrics": {"metric": "acc", "value": 1.0},
+        "usage": {}, "wallclock_s": 1.0, "exit_code": 0, "error": None,
+        "events_path": None,
+    }))
+
+    result = await codex_exec(prompt, FakeCtx())
+    assert result["cached"] is True
+    assert result["run_id"] == legacy_id
+    assert result["thread_id"] == "t-old"
+
+
+async def test_killed_wins_over_completed_marker(env):
+    """Precedence rule: an explicit user kill beats the run's own marker."""
+    import json
+    settings, _ = env
+    from deep_researcher.monitor import list_runs
+
+    run_dir = (settings.projects_dir / "proj-prec" / "iter_1" / "exp_B1"
+               / "runs" / "rr1")
+    run_dir.mkdir(parents=True)
+    (run_dir / "result.json").write_text(json.dumps(
+        {"status": "completed", "run_id": "rr1", "usage": {}, "wallclock_s": 2.0}
+    ))
+    store = JobsStore(settings.db_path)
+    store.start(project_id="proj-prec", branch="B1", run_id="rr1")
+    store.kill("proj-prec:rr1")
+
+    runs = list_runs("proj-prec")
+    assert len(runs) == 1
+    assert runs[0].status == "killed"

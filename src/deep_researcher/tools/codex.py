@@ -21,6 +21,7 @@ from google.adk.tools import ToolContext
 from google.genai import types
 
 from ..codex import CodexRunResult, prepare_workspace, run_codex
+from ..codex.runner import RESULT_MARKER
 from ..config import get_settings
 from ..notify import notify
 from ..storage.jobs import JobsStore
@@ -83,11 +84,20 @@ async def _run_branch(
     branch = _safe_branch(branch_id)
     exp_dir = settings.projects_dir / project_id / "iter_1" / f"exp_{branch}"
     workspace = exp_dir / "repo"
-    prepare_workspace(workspace)
+    await asyncio.to_thread(prepare_workspace, workspace)  # git ops off the loop
 
     seed = f"{branch}|{task_prompt}|{resume_thread_id or ''}"
     run_id = hashlib.sha1(seed.encode()).hexdigest()[:10]
     run_dir = exp_dir / "runs" / run_id
+    if branch == "main" and not (run_dir / RESULT_MARKER).exists():
+        # Pre-3a markers were keyed without the branch; honor them so an ADK
+        # resume never re-launches a paid run that already completed (§16).
+        legacy_id = hashlib.sha1(
+            f"{task_prompt}|{resume_thread_id or ''}".encode()
+        ).hexdigest()[:10]
+        legacy_dir = exp_dir / "runs" / legacy_id
+        if (legacy_dir / RESULT_MARKER).exists():
+            run_id, run_dir = legacy_id, legacy_dir
     job_id = f"{project_id}:{run_id}"
 
     def on_spawn(pid: int, pgid: int) -> None:
@@ -106,14 +116,17 @@ async def _run_branch(
         on_spawn=on_spawn,
     )
     if not result.cached:
-        # Don't clobber 'killed' written by the UI's kill-branch.
+        # Precedence rule: an explicit user kill always wins over whatever
+        # the process managed to write before dying (single rule, also
+        # applied by monitor.list_runs).
         job = _jobs().get(job_id)
-        if job is None or job.status != "killed":
+        if job is not None and job.status == "killed":
+            result.status = "killed"
+        else:
             _jobs().start(project_id=project_id, branch=branch, run_id=run_id)
             _jobs().finish(job_id, result.status)
-        elif result.status in ("failed", "killed"):
-            result.status = "killed"
-        notify(
+        await asyncio.to_thread(  # osascript/webhook off the loop
+            notify,
             f"Experiment {branch}: {result.status}",
             f"{project_id} · run {run_id} · {result.wallclock_s:.0f}s",
         )

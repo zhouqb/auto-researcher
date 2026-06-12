@@ -177,12 +177,11 @@ class ExperienceStore:
         The query is sanitized to bare keywords (FTS5 operators stripped) and
         OR-joined so partial matches still hit.
         """
-        terms = [t for t in "".join(
-            c if c.isalnum() else " " for c in query
-        ).split() if len(t) > 1]
-        if not terms:
+        from .fts import sanitize_fts_query
+
+        fts_query = sanitize_fts_query(query)
+        if fts_query is None:
             return []
-        fts_query = " OR ".join(terms[:24])
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT e.* FROM experiences_fts f

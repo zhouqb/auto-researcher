@@ -12,7 +12,9 @@ project simply by setting the chat thread. Run with:
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections import defaultdict
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -142,26 +144,34 @@ def create_gateway() -> FastAPI:
             "resumable_invocation": find_resumable_invocation(session),
         }
 
+    # One resume at a time per project: a double-click (or a resume racing a
+    # live /agui run) must not replay the same invocation twice.
+    api.state.resume_locks = defaultdict(asyncio.Lock)
+
     @api.post("/api/projects/{project_id}/resume")
     async def resume(project_id: str) -> dict[str, Any]:
-        runner = build_runner()
-        session = await runner.session_service.get_session(
-            app_name=settings.app_name, user_id=DEFAULT_USER_ID,
-            session_id=project_id,
-        )
-        if session is None:
-            raise HTTPException(404, "no such project")
-        invocation_id = find_resumable_invocation(session)
-        if invocation_id is None:
-            return {"resumed": False, "reason": "nothing to resume"}
-        texts: list[str] = []
-        async for ev in runner.run_async(
-            user_id=DEFAULT_USER_ID, session_id=project_id,
-            invocation_id=invocation_id,
-        ):
-            if (t := event_text(ev)) and not ev.partial:
-                texts.append(t)
-        return {"resumed": True, "final_messages": texts[-3:]}
+        lock: asyncio.Lock = api.state.resume_locks[project_id]
+        if lock.locked():
+            raise HTTPException(409, "a resume is already in progress")
+        async with lock:
+            runner = build_runner()
+            session = await runner.session_service.get_session(
+                app_name=settings.app_name, user_id=DEFAULT_USER_ID,
+                session_id=project_id,
+            )
+            if session is None:
+                raise HTTPException(404, "no such project")
+            invocation_id = find_resumable_invocation(session)
+            if invocation_id is None:
+                return {"resumed": False, "reason": "nothing to resume"}
+            texts: list[str] = []
+            async for ev in runner.run_async(
+                user_id=DEFAULT_USER_ID, session_id=project_id,
+                invocation_id=invocation_id,
+            ):
+                if (t := event_text(ev)) and not ev.partial:
+                    texts.append(t)
+            return {"resumed": True, "final_messages": texts[-3:]}
 
     # -- artifacts ----------------------------------------------------------
 

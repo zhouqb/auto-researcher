@@ -97,3 +97,35 @@ async def test_fts_search(service):
     )
     hits = catalog.search("routing")
     assert hits and hits[0].path == "lit/synthesis.md"
+
+
+async def test_search_operator_chars_do_not_crash(service):
+    svc, catalog, _ = service
+    await svc.save_artifact(
+        app_name="app", user_id="u1", session_id="proj1",
+        filename="lit/notes.md",
+        artifact=types.Part(text="Non-IID data distribution shift"),
+        custom_metadata={"summary": "non-iid robustness notes"},
+    )
+    # FTS5 operator characters must be sanitized, not raise OperationalError
+    hits = catalog.search('non-iid: "data" (shift)')
+    assert hits and hits[0].path == "lit/notes.md"
+    assert catalog.search("!!! ()") == []
+
+
+async def test_search_project_filter_applies_in_sql(service):
+    svc, catalog, _ = service
+    # flood project "other" with matches that would fill a small LIMIT
+    for i in range(3):
+        await svc.save_artifact(
+            app_name="app", user_id="u1", session_id="other",
+            filename=f"lit/f{i}.md",
+            artifact=types.Part(text="gradient descent convergence analysis"),
+        )
+    await svc.save_artifact(
+        app_name="app", user_id="u1", session_id="target",
+        filename="lit/mine.md",
+        artifact=types.Part(text="gradient descent convergence analysis"),
+    )
+    hits = catalog.search("gradient convergence", project_id="target", limit=2)
+    assert [h.project_id for h in hits] == ["target"]

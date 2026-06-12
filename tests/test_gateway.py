@@ -119,3 +119,42 @@ def test_dashboard(client):
     assert card["id"] == "dashboard-smoke"
     assert card["has_report"] is False
     assert card["running_runs"] == 0 and card["total_runs"] == 0
+
+
+@pytest.mark.asyncio
+async def test_resume_endpoint_guards(tmp_path, monkeypatch):
+    """Resume: 409 while another resume holds the lock; clean no-op otherwise."""
+    import asyncio
+    import httpx
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-dummy")
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data"))
+    config_mod.get_settings.cache_clear()
+    import deep_researcher.tools.codex as codex_tools
+    codex_tools._jobs.cache_clear()
+
+    from deep_researcher.gateway import create_gateway
+    app = create_gateway()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        r = await c.post("/api/projects", json={"question": "Resume guard?"})
+        pid = r.json()["id"]
+
+        # concurrent resume in flight → 409
+        lock: asyncio.Lock = app.state.resume_locks[pid]
+        await lock.acquire()
+        try:
+            r = await c.post(f"/api/projects/{pid}/resume")
+            assert r.status_code == 409
+        finally:
+            lock.release()
+
+        # nothing to resume → explicit no-op, not an error
+        r = await c.post(f"/api/projects/{pid}/resume")
+        assert r.status_code == 200
+        assert r.json() == {"resumed": False, "reason": "nothing to resume"}
+
+        # unknown project → 404
+        r = await c.post("/api/projects/nope/resume")
+        assert r.status_code == 404
+    config_mod.get_settings.cache_clear()
