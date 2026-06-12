@@ -8,28 +8,19 @@ with every artifact landing in the store and catalog.
 
 from __future__ import annotations
 
-from typing import AsyncGenerator
-
 import pytest
 from google.adk.apps import App
-from google.adk.models import BaseLlm, LlmRequest, LlmResponse
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+
+from scripted_llm import SCRIPTS, ScriptedLlm, _call, _text, patch_models
 
 import deep_researcher.config as config_mod
 from deep_researcher.agents import build_root_agent
 from deep_researcher.storage import ArtifactCatalog, LocalArtifactService
 
 pytestmark = pytest.mark.asyncio
-
-
-def _call(name: str, **args) -> types.Part:
-    return types.Part(function_call=types.FunctionCall(name=name, args=args))
-
-
-def _text(t: str) -> types.Part:
-    return types.Part(text=t)
 
 
 def _notes_call(i: int) -> types.Part:
@@ -41,56 +32,6 @@ def _notes_call(i: int) -> types.Part:
         title=f"Facet {i} notes",
         summary=f"Notes for facet {i}",
     )
-
-
-# Module-level script store: agent name → queue of scripted model responses.
-SCRIPTS: dict[str, list[list[types.Part]]] = {}
-
-
-def _system_instruction_text(llm_request: LlmRequest) -> str:
-    si = llm_request.config.system_instruction if llm_request.config else None
-    if si is None:
-        return ""
-    if isinstance(si, str):
-        return si
-    parts = getattr(si, "parts", None) or []
-    return " ".join(p.text or "" for p in parts)
-
-
-def _agent_from_request(llm_request: LlmRequest) -> str:
-    # Identify the calling agent by markers planted in our instructions.
-    si = _system_instruction_text(llm_request)
-    for i in (1, 2, 3):
-        if f"literature searcher #{i}" in si:
-            return f"lit_searcher_{i}"
-    if "synthesize a research team" in si:
-        return "lit_synthesizer"
-    if "final research report" in si:
-        return "report_writer"
-    if "code-expressible experiment" in si:
-        return "experiment_designer"
-    if "analyze experiment results" in si:
-        return "result_analyst"
-    return "orchestrator"
-
-
-class ScriptedLlm(BaseLlm):
-    """Pops one scripted response per model call, keyed by calling agent."""
-
-    @classmethod
-    def supported_models(cls) -> list[str]:
-        return [".*"]
-
-    async def generate_content_async(
-        self, llm_request: LlmRequest, stream: bool = False
-    ) -> AsyncGenerator[LlmResponse, None]:
-        agent = _agent_from_request(llm_request)
-        queue = SCRIPTS.get(agent)
-        assert queue, f"No scripted response left for agent {agent!r}"
-        parts = queue.pop(0)
-        yield LlmResponse(
-            content=types.Content(role="model", parts=parts), turn_complete=True
-        )
 
 
 @pytest.fixture
@@ -152,20 +93,7 @@ def harness(tmp_path, monkeypatch):
     })
 
     root = build_root_agent()
-    mock = ScriptedLlm(model="scripted")
-
-    def patch_models(agent):
-        if hasattr(agent, "model"):
-            agent.model = mock
-        for sub in agent.sub_agents:
-            patch_models(sub)
-        # Stage agents are wrapped as AgentTools, not sub_agents.
-        from google.adk.tools.agent_tool import AgentTool
-        for tool in getattr(agent, "tools", []):
-            if isinstance(tool, AgentTool):
-                patch_models(tool.agent)
-
-    patch_models(root)
+    patch_models(root, ScriptedLlm(model="scripted"))
 
     catalog = ArtifactCatalog(settings.db_path)
     runner = Runner(

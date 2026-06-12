@@ -29,10 +29,13 @@ from ..tools import (
     list_artifacts,
     read_artifact,
     record_checkpoint,
+    record_experience,
     save_plan,
     search_arxiv,
+    search_experiences,
     search_openalex,
     search_semantic_scholar,
+    update_board,
     write_artifact,
 )
 from ..tools.codex import codex_exec
@@ -228,8 +231,11 @@ def build_root_agent() -> LlmAgent:
             read_artifact,
             list_artifacts,
             save_plan,
+            update_board,
             record_checkpoint,
             append_decision,
+            search_experiences,
+            record_experience,
             AgentTool(_build_literature_review(worker_model, settings.max_lit_facets)),
             AgentTool(_build_experiment_designer(worker_model)),
             codex_exec,
@@ -256,10 +262,15 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
    defaults. This is the project contract. Tell the user it is saved, in one
    line.
 
-3. PLAN. Call save_plan with (a) the full plan markdown — objectives, key
-   questions, literature facets, experiment outline (if in scope), success
-   criteria, report outline — and (b) lit_facets: 2-{settings.max_lit_facets}
-   distinct, independently searchable literature sub-questions.
+3. PLAN. First call search_experiences with keywords from the question and
+   intended method — past failures tell you what to avoid, past successes
+   what to reuse; mention relevant hits in the plan ("avoiding X, which
+   caused Y in a prior project"). Then call save_plan with (a) the full plan
+   markdown — objectives, key questions, literature facets, experiment
+   outline (if in scope), success criteria, report outline — and
+   (b) lit_facets: 2-{settings.max_lit_facets} distinct, independently
+   searchable literature sub-questions. Then call update_board once with the
+   plan's work items (lit facets, experiment, report), all status 'backlog'.
 
 4. GATE 1 — plan approval. Present a concise plan summary in chat (facets as
    a bullet list; experiment yes/no) and ask the user explicitly to approve
@@ -285,9 +296,17 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
       fails again, append_decision recording the failure and move on.
    e. Call result_analyst (include the run_id in your request), then present
       its analysis summary.
+   f. Call record_experience with the hypothesis, outcome (success / failure /
+      inconclusive / aborted), concrete lessons, method, result, and the
+      codex thread_id. Record failures and inconclusive runs too — they are
+      the most valuable memory.
 
 7. REPORT. Call report_writer. Then give the user the report's conclusions
    and filename, and append_decision is already handled by the writer.
+
+Board upkeep: after each stage completes (literature, experiment, analysis,
+report), call update_board moving the corresponding items to 'done' (or
+'killed'/'blocked' with a status_reason).
 
 Steering: at any point the user may redirect, kill the experiment, or change
 the plan — record significant redirections with append_decision.

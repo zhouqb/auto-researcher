@@ -15,8 +15,10 @@ from deep_researcher.runner import (
     build_runner,
     event_text,
     event_tool_calls,
+    find_resumable_invocation,
     get_or_create_session,
     list_projects,
+    resume_invocation,
     run_turn,
     slugify,
 )
@@ -35,15 +37,28 @@ def fetch_projects() -> list[str]:
     return asyncio.run(_go())
 
 
-def fetch_history(project_id: str) -> list[tuple[str, str]]:
+def fetch_history(project_id: str) -> tuple[list[tuple[str, str]], str | None]:
+    """Returns (chat messages, resumable invocation id if the last run crashed)."""
     async def _go():
         session = await get_or_create_session(build_runner(), project_id)
-        return [
+        msgs = [
             (ev.author, event_text(ev))
             for ev in session.events
             if event_text(ev) and not ev.partial
         ]
+        return msgs, find_resumable_invocation(session)
     return asyncio.run(_go())
+
+
+def do_resume(project_id: str, invocation_id: str, status) -> None:
+    async def _go():
+        async for ev in resume_invocation(build_runner(), project_id, invocation_id):
+            for tool in event_tool_calls(ev):
+                status.write(f"`{ev.author}` → **{tool}**")
+            text = event_text(ev)
+            if text and not ev.partial:
+                status.write(f"`{ev.author}`: {text[:300]}")
+    asyncio.run(_go())
 
 
 def send_message(project_id: str, message: str, status) -> None:
@@ -110,12 +125,24 @@ chat_col, view_col = st.columns([3, 2], gap="large")
 with chat_col:
     st.subheader(project_id)
 
-    for author, text in fetch_history(project_id):
+    history, resumable_id = fetch_history(project_id)
+    for author, text in history:
         role = "user" if author == "user" else "assistant"
         with st.chat_message(role):
             if role == "assistant":
                 st.caption(author)
             st.markdown(text)
+
+    if resumable_id:
+        st.warning("The last run was interrupted before finishing.")
+        if st.button("▶️ Resume interrupted run"):
+            with st.status("Resuming…", expanded=True) as status:
+                try:
+                    do_resume(project_id, resumable_id, status)
+                    status.update(label="Resumed", state="complete", expanded=False)
+                except Exception as e:
+                    status.update(label=f"Error: {e}", state="error")
+            st.rerun()
 
     # Gate quick actions (Gate 1: plan approval flows through chat).
     a, b, _sp = st.columns([1, 1, 2])
@@ -183,10 +210,35 @@ def run_monitor(pid: str) -> None:
                 st.markdown(run.last_message)
 
 
+def board_view(pid: str) -> None:
+    board_file = settings.projects_dir / pid / "plan/board.json"
+    if not board_file.exists():
+        st.caption("No board yet — created when the plan is saved.")
+        return
+    items = json.loads(board_file.read_text()).get("items", [])
+    columns = ["backlog", "in_progress", "blocked", "awaiting_review", "done", "killed"]
+    present = [c for c in columns if any(i.get("status") == c for i in items)]
+    if not present:
+        st.caption("Board is empty.")
+        return
+    cols = st.columns(len(present))
+    for col, status_name in zip(cols, present):
+        with col:
+            st.markdown(f"**{status_name}**")
+            for item in items:
+                if item.get("status") == status_name:
+                    st.markdown(
+                        f"- `{item.get('type', '?')}` {item.get('title', item.get('id'))}"
+                        + (f"\n  - _{item['status_reason']}_" if item.get("status_reason") else "")
+                    )
+
+
 with view_col:
-    monitor_tab, artifact_tab = st.tabs(["🖥 Runs", "📄 Artifact"])
+    monitor_tab, board_tab, artifact_tab = st.tabs(["🖥 Runs", "📋 Board", "📄 Artifact"])
     with monitor_tab:
         run_monitor(project_id)
+    with board_tab:
+        board_view(project_id)
     path = st.session_state.get("view_artifact")
     with artifact_tab:
         if path:

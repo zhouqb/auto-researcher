@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     max_clarifying_questions: int = 3
     max_lit_facets: int = 3
 
+    # Context compaction (design §6): summarize every N events, keep overlap.
+    compaction_interval: int = 40
+    compaction_overlap: int = 8
+
     @property
     def root(self) -> Path:
         return self.data_root.expanduser()

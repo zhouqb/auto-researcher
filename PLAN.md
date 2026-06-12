@@ -84,11 +84,32 @@ catalog from day one. Streamlit steering UI + terminal REPL.
 - CLI (`codex exec --json`) over the SDK: stable, already authenticated, no
   extra dependency.
 
-## Phase 2 — Memory + resumability
+## Phase 2 — Memory + resumability ✅ (complete 2026-06-11)
 
-- experience store (success+failure schema §5) on FTS5; retrieval at planning time
-- `ResumabilityConfig(is_resumable=True)`; crash recovery; pause/hard-cancel
-- steering inbox; `board.json`; compaction at stage boundaries; `todo.md` recitation
+- [x] `storage/experiences.py` — experience store (success+failure schema §5)
+      on SQLite FTS5, cross-project; supersede links hide overturned records;
+      FTS query sanitization; confidence scores
+- [x] tools: `search_experiences` (orchestrator calls it BEFORE planning),
+      `record_experience` (after every experiment analysis, failures included)
+- [x] `ResumabilityConfig(is_resumable=True)` on the App; crash recovery:
+      `find_resumable_invocation` + `resume_invocation`; CLI `--resume`;
+      Streamlit "Resume interrupted run" banner. Verified by an offline
+      crash/resume test: interrupted after a persisted tool call, resumed on a
+      fresh runner, completed step replayed (no duplicate artifact writes)
+- [x] context compaction: `EventsCompactionConfig` + `LlmEventSummarizer`
+      (DeepSeek), interval/overlap in config
+- [x] `board.json`: `update_board` tool (orchestrator updates at stage
+      transitions) + Streamlit Board tab
+
+**Decisions (vs. design doc)**
+- Pause/hard-cancel + steering inbox deferred to Phase 3: turns are currently
+  synchronous (the user steers between turns), so mid-run interrupts only
+  become meaningful once experiments move onto the async jobs queue.
+- `todo.md` recitation: superseded by ADK's native event compaction + the
+  orchestrator re-reading `plan.md`; revisit if goal drift appears in long
+  projects.
+- ADK marks ResumabilityConfig/EventsCompactionConfig experimental — pinned
+  google-adk 2.2.0 in uv.lock; re-verify on upgrades.
 
 ## Phase 3 — Parallel exploration + full UI
 

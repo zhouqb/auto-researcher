@@ -142,6 +142,33 @@ async def record_checkpoint(
     return {"filename": filename, "version": version}
 
 
+async def update_board(items: list[dict], tool_context: ToolContext) -> dict[str, Any]:
+    """Update the project kanban board (plan/board.json) — call at stage transitions.
+
+    Args:
+        items: Full board state, one dict per item:
+            {"id": "lit-1", "title": "...",
+             "type": "lit_task|hypothesis|experiment|analysis|report_section",
+             "status": "backlog|in_progress|blocked|awaiting_review|done|killed",
+             "status_reason": "...", "artifact_refs": ["lit/facet_1/notes.md"]}
+    """
+    import json
+
+    version = await tool_context.save_artifact(
+        "plan/board.json",
+        types.Part(text=json.dumps({"items": items}, indent=2)),
+        custom_metadata={
+            "kind": "board",
+            "title": "Project board",
+            "summary": "; ".join(
+                f"{i.get('id')}:{i.get('status')}" for i in items
+            )[:200],
+            "created_by": tool_context.agent_name,
+        },
+    )
+    return {"filename": "plan/board.json", "version": version}
+
+
 async def save_plan(
     plan_markdown: str, lit_facets: list[str], tool_context: ToolContext
 ) -> dict[str, Any]:
