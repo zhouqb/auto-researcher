@@ -38,6 +38,9 @@ def slugify(name: str) -> str:
 
 
 def build_app() -> App:
+    from .patches import apply_adk_patches
+
+    apply_adk_patches()
     settings = get_settings()
     return App(
         name=settings.app_name,
@@ -45,7 +48,10 @@ def build_app() -> App:
         resumability_config=ResumabilityConfig(is_resumable=True),
         events_compaction_config=EventsCompactionConfig(
             summarizer=LlmEventSummarizer(
-                llm=LiteLlm(model=settings.worker_model)
+                llm=LiteLlm(
+                    model=settings.worker_model,
+                    max_tokens=settings.model_max_tokens,
+                )
             ),
             compaction_interval=settings.compaction_interval,
             overlap_size=settings.compaction_overlap,

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     deepseek_api_key: Optional[str] = None
     orchestrator_model: str = "deepseek/deepseek-chat"
     worker_model: str = "deepseek/deepseek-chat"
+    # Max output tokens per model response. DeepSeek defaults to 4k when
+    # unset, which truncates long tool calls (e.g. report writing) mid-JSON.
+    model_max_tokens: int = 8192
 
     # Search backends handed to agents (comma-separated subset of: openalex,
     # arxiv, semantic_scholar, openreview, github, web). Semantic Scholar is

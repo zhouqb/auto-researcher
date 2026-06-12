@@ -24,21 +24,30 @@ async def write_artifact(
     title: str,
     summary: str,
     tool_context: ToolContext,
+    append: bool = False,
 ) -> dict[str, Any]:
     """Save a text artifact (markdown/json) to the project's artifact store.
 
     Args:
         filename: Project-relative path, e.g. "brief/research_brief.md",
             "plan/plan.md", "lit/facet_1/notes.md", "reports/final_report.md".
-        content: Full text content of the artifact.
+        content: Full text content of the artifact (or the next part, with
+            append=True).
         kind: One of: brief, design, plan, decision, checkpoint, lit_notes,
             hypothesis, analysis, report, other.
         title: Short human-readable title.
         summary: 1-3 sentence summary (other agents see this instead of the body).
+        append: Append content to the artifact's latest version instead of
+            replacing it. Use this to build long documents across several
+            calls — each call's content stays small.
 
     Returns:
         {filename, version, summary} reference to pass around.
     """
+    if append:
+        prior = await tool_context.load_artifact(filename)
+        if prior is not None and prior.text:
+            content = prior.text + "\n" + content
     version = await tool_context.save_artifact(
         filename,
         types.Part(text=content),
