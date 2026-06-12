@@ -301,13 +301,16 @@ Steps ({_TOOL_DISCIPLINE}):
 3. read_artifact 'lit/synthesis.md'; read facet notes if you need more depth.
 4. If the project ran an experiment, read 'iter_1/exp_spec.md' and
    'iter_1/analysis.md' too (check list_artifacts when unsure).
-5. Save with write_artifact to 'reports/final_report.md' (kind 'report'):
-   executive summary; background; findings organized by the plan's key
-   questions, with inline numeric citations like [3]; an Experiment section
-   (method, results table, verdict) when one exists; discussion (open
-   problems, promising directions); a References section listing every cited
-   work (title, authors, year, venue, url). Cite only papers present in the
-   literature notes — never invent references. Use $...$ KaTeX for math.
+5. Save to 'reports/final_report.md' (kind 'report') IN PARTS — one
+   write_artifact call per part, each under ~1500 words (a single huge call
+   gets cut off mid-write): first call with the opening sections, then
+   append=true for each later part. Sections: executive summary; background;
+   findings organized by the plan's key questions, with inline numeric
+   citations like [3]; an Experiment section (method, results table,
+   verdict) when one exists; discussion (open problems, promising
+   directions); a References section listing every cited work (title,
+   authors, year, venue, url). Cite only papers present in the literature
+   notes — never invent references. Use $...$ KaTeX for math.
 6. append_decision recording that the report was completed (evidence:
    'reports/final_report.md').
 End with: a 5-10 sentence summary of the report's conclusions, the artifact
@@ -355,8 +358,12 @@ Steps ({_TOOL_DISCIPLINE}):
 
 def build_root_agent() -> LlmAgent:
     settings = get_settings()
-    orchestrator_model = LiteLlm(model=settings.orchestrator_model)
-    worker_model = LiteLlm(model=settings.worker_model)
+    orchestrator_model = LiteLlm(
+        model=settings.orchestrator_model, max_tokens=settings.model_max_tokens
+    )
+    worker_model = LiteLlm(
+        model=settings.worker_model, max_tokens=settings.model_max_tokens
+    )
     search_names = parse_search_tools(settings.search_tools)
 
     return LlmAgent(
