@@ -1,0 +1,21 @@
+# Local reverse proxy: friendly names for the local stack.
+#
+#   http://researcher.localhost  → Deep Researcher UI  (next dev, pinned :3001)
+#   http://langfuse.localhost    → Langfuse            (docker, :3000)
+#
+# macOS resolves *.localhost to loopback system-wide, so no /etc/hosts edits.
+# Install as an always-on service (survives reboots, independent of dev.sh):
+#
+#   cp scripts/Caddyfile "$(brew --prefix)/etc/Caddyfile"
+#   brew services restart caddy
+{
+	auto_https off
+}
+
+http://researcher.localhost {
+	reverse_proxy 127.0.0.1:3001
+}
+
+http://langfuse.localhost {
+	reverse_proxy 127.0.0.1:3000
+}

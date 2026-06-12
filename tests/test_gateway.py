@@ -161,9 +161,15 @@ async def test_resume_endpoint_guards(tmp_path, monkeypatch):
 
 
 def test_cors_allows_any_localhost_port(client):
-    """Next.js auto-bumps to 3001+ when Langfuse holds 3000 (regression)."""
+    """Next.js auto-bumps to 3001+ when Langfuse holds 3000 (regression);
+    *.localhost names come from the local Caddy proxy."""
     c, _ = client
-    for origin in ("http://localhost:3001", "http://127.0.0.1:4567"):
+    for origin in (
+        "http://localhost:3001",
+        "http://127.0.0.1:4567",
+        "http://researcher.localhost",
+        "http://langfuse.localhost",
+    ):
         r = c.options(
             "/api/projects",
             headers={
@@ -174,15 +180,20 @@ def test_cors_allows_any_localhost_port(client):
         )
         assert r.status_code == 200
         assert r.headers["access-control-allow-origin"] == origin
-    # non-localhost origins stay rejected
-    r = c.options(
-        "/api/projects",
-        headers={
-            "Origin": "http://evil.example:3000",
-            "Access-Control-Request-Method": "POST",
-        },
-    )
-    assert "access-control-allow-origin" not in r.headers
+    # non-local origins stay rejected (regex is full-match)
+    for origin in (
+        "http://evil.example:3000",
+        "http://researcher.localhost.evil.example",
+        "https://localhost.evil.example",
+    ):
+        r = c.options(
+            "/api/projects",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert "access-control-allow-origin" not in r.headers, origin
 
 
 def test_delete_project_removes_everything(client):
