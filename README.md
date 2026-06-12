@@ -161,6 +161,32 @@ memory, and the jobs table. `scripts/backup.sh` archives the whole data root
   claims, leakage signs, and single-seed overreach; blocking findings force a
   revision before delivery.
 
+## Observability
+
+Logs go to the console and `DATA_ROOT/logs/deep_researcher.log` (rotating,
+level via `LOG_LEVEL`).
+
+Tracing is built in but off by default. ADK instruments every agent step,
+LLM call, and tool call with OpenTelemetry spans; to see them, self-host
+[Langfuse](https://langfuse.com/self-hosting) (free, MIT-licensed core):
+
+```sh
+git clone https://github.com/langfuse/langfuse.git && cd langfuse
+docker compose up -d        # UI at http://localhost:3000
+```
+
+Create a project in the Langfuse UI, grab its API keys, and add:
+
+```sh
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=http://localhost:3000   # default
+```
+
+Restart the gateway and every research turn appears as a trace — the full
+orchestrator → sub-agent → model/tool span tree with latencies. Without the
+keys, tracing stays a silent no-op.
+
 ## Configuration
 
 All settings are env vars (or `.env` entries); defaults in

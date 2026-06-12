@@ -11,6 +11,7 @@ dependencies = [
     "greenlet>=3.5.1",
     "httpx>=0.28.1",
     "litellm>=1.88.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.41.1",
     "pydantic-settings>=2.14.1",
     "streamlit>=1.58.0",
 ]

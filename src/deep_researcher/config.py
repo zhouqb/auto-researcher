@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     desktop_notifications: bool = True
     notify_webhook_url: Optional[str] = None
 
+    # Observability: file/console logging level; optional Langfuse tracing
+    # (self-hosted, both keys required to enable OTLP span export).
+    log_level: str = "INFO"
+    langfuse_host: str = "http://localhost:3000"
+    langfuse_public_key: Optional[str] = None
+    langfuse_secret_key: Optional[str] = None
+
     @property
     def root(self) -> Path:
         return self.data_root.expanduser()

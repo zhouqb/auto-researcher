@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import time
@@ -28,6 +29,8 @@ from typing import Any, Optional
 RESULT_MARKER = "result.json"
 EVENTS_FILE = "codex_events.jsonl"
 METRICS_FILE = "metrics.json"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -115,7 +118,10 @@ async def run_codex(
     """Run one non-interactive Codex turn, sandboxed to the workspace."""
     cached = read_cached_result(run_dir)
     if cached is not None:
+        logger.info("codex run %s: returning cached result (%s)", run_id, cached.status)
         return cached
+    logger.info("codex run %s starting (workspace=%s, resume=%s)",
+                run_id, workspace, resume_thread_id or "-")
 
     workspace.mkdir(parents=True, exist_ok=True)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -223,4 +229,7 @@ async def run_codex(
     payload = asdict(result)
     payload.pop("cached", None)
     (run_dir / RESULT_MARKER).write_text(json.dumps(payload, indent=2))
+    logger.info("codex run %s finished: %s in %.0fs (usage=%s)%s",
+                run_id, result.status, result.wallclock_s, result.usage,
+                f" error={result.error}" if result.error else "")
     return result
