@@ -14,6 +14,7 @@ from typing import Any, Optional
 from .codex import ParsedEvents, parse_event_line
 from .codex.runner import EVENTS_FILE, RESULT_MARKER
 from .config import get_settings
+from .storage.jobs import JobsStore
 
 
 @dataclass
@@ -39,8 +40,17 @@ def _parse_events_file(path: Path) -> ParsedEvents:
     return acc
 
 
+def kill_run(project_id: str, run_id: str) -> bool:
+    """Kill one branch's running Codex process group (design §11.2)."""
+    return JobsStore(get_settings().db_path).kill(f"{project_id}:{run_id}")
+
+
 def list_runs(project_id: str) -> list[RunInfo]:
     project_dir = get_settings().projects_dir / project_id
+    job_status = {
+        j.run_id: j.status
+        for j in JobsStore(get_settings().db_path).for_project(project_id)
+    }
     runs: list[RunInfo] = []
     for run_dir in sorted(project_dir.glob("iter_*/exp_*/runs/*")):
         if not run_dir.is_dir():
@@ -52,7 +62,7 @@ def list_runs(project_id: str) -> list[RunInfo]:
         info = RunInfo(
             run_id=run_dir.name,
             experiment=experiment,
-            status="running",
+            status=job_status.get(run_dir.name, "running"),
             thread_id=acc.thread_id,
             usage=acc.usage,
             commands=acc.commands,

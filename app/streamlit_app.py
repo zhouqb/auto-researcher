@@ -22,7 +22,7 @@ from deep_researcher.runner import (
     run_turn,
     slugify,
 )
-from deep_researcher.monitor import list_runs, load_budget
+from deep_researcher.monitor import kill_run, list_runs, load_budget
 from deep_researcher.storage import ArtifactCatalog
 
 st.set_page_config(page_title="Deep Researcher", layout="wide")
@@ -187,13 +187,19 @@ def run_monitor(pid: str) -> None:
     if not runs:
         st.caption("No experiment runs yet.")
         return
-    icons = {"running": "🟡", "completed": "🟢", "failed": "🔴", "timeout": "🟠"}
+    icons = {"running": "🟡", "completed": "🟢", "failed": "🔴",
+             "timeout": "🟠", "killed": "⚫"}
     for run in runs:
         head = (
             f"{icons.get(run.status, '⚪')} `{run.experiment}` run "
             f"`{run.run_id}` — **{run.status}**"
         )
         with st.expander(head, expanded=(run.status == "running")):
+            if run.status == "running" and st.button(
+                "⛔ Kill branch", key=f"kill_{run.run_id}"
+            ):
+                kill_run(pid, run.run_id)
+                st.rerun(scope="fragment")
             if run.usage:
                 st.caption(
                     f"tokens in/out: {run.usage.get('input_tokens', 0):,}/"
