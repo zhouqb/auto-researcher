@@ -27,11 +27,17 @@ class Settings(BaseSettings):
     orchestrator_model: str = "deepseek/deepseek-chat"
     worker_model: str = "deepseek/deepseek-chat"
 
+    # Search backends handed to agents (comma-separated subset of: openalex,
+    # arxiv, semantic_scholar, openreview, github, web). Default is the lean
+    # keyless trio; semantic_scholar (429s without a key), openreview, and
+    # web (needs TAVILY_API_KEY) are opt-in.
+    search_tools: str = "openalex,arxiv,github"
+
     # Optional: raises Semantic Scholar rate limits when present.
     semantic_scholar_api_key: Optional[str] = None
     # Optional: joins OpenAlex's "polite pool" (faster, more consistent).
     openalex_mailto: Optional[str] = None
-    # Optional: enables search_web (engineering blogs/docs via Tavily).
+    # Key for search_web (Tavily); add "web" to SEARCH_TOOLS to enable it.
     tavily_api_key: Optional[str] = None
     # Optional: raises GitHub search rate limits (falls back to `gh auth token`).
     github_token: Optional[str] = None

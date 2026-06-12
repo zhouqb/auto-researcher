@@ -27,7 +27,7 @@ plan + literature facets ──► plan.md, board.json
    │
    ▼ ❶ GATE: you approve the plan
    │
-parallel literature searchers (OpenAlex / arXiv / Semantic Scholar)
+parallel literature searchers (OpenAlex / arXiv / GitHub by default)
    ──► lit/facet_*/notes.md ──► lit/synthesis.md
    │
    ▼ (if an experiment is in scope)
@@ -59,7 +59,7 @@ recorded (`checkpoints/`, `decisions.md`).
 | Orchestration | Google ADK (LoopAgent/ParallelAgent, sessions, resumability) |
 | Models | DeepSeek via LiteLLM (`deepseek/deepseek-chat`; swappable in config) |
 | Code experiments | OpenAI Codex CLI, `--sandbox workspace-write`, via your ChatGPT login |
-| Literature search | OpenAlex (primary), arXiv, OpenReview (peer-review signal), GitHub (implementations), Tavily web search (blogs, optional key), Semantic Scholar (optional key) |
+| Literature search | OpenAlex (primary), arXiv, GitHub (implementations) on by default; OpenReview (peer-review signal), Tavily web search (needs key), Semantic Scholar (rate-limited without key) opt-in via `SEARCH_TOOLS` |
 | State | One SQLite file + plain files under `DATA_ROOT` — backup = copy a folder |
 | UI | Next.js + AG-UI/CopilotKit (full) · Streamlit (lightweight) · CLI |
 
@@ -81,7 +81,7 @@ Add keys to `~/.env`, a project-local `.env`, or your shell profile:
 
 ```sh
 DEEPSEEK_API_KEY=sk-...          # required — drives all agents
-TAVILY_API_KEY=tvly-...          # optional: enables web search for engineering blogs
+TAVILY_API_KEY=tvly-...          # optional: web search key (also add "web" to SEARCH_TOOLS)
 GITHUB_TOKEN=ghp_...             # optional: raises GitHub search limits (else falls back to `gh auth token`)
 SEMANTIC_SCHOLAR_API_KEY=...     # optional: unlocks S2 search (unauth pool is heavily rate-limited)
 OPENALEX_MAILTO=you@example.com  # optional: OpenAlex "polite pool" (faster, more reliable)
@@ -198,6 +198,7 @@ All settings are env vars (or `.env` entries); defaults in
 | `ORCHESTRATOR_MODEL` / `WORKER_MODEL` | `deepseek/deepseek-chat` | LiteLLM model ids |
 | `CODEX_MODEL` | Codex CLI default | model for experiment runs |
 | `CODEX_TIMEOUT_S` | `3600` | per-run wallclock cap |
+| `SEARCH_TOOLS` | `openalex,arxiv,github` | enabled search backends (also available: `semantic_scholar`, `openreview`, `web`) |
 | `MAX_LIT_FACETS` | `3` | parallel literature searchers |
 | `MAX_EXPERIMENT_BRANCHES` | `3` | parallel experiment branches |
 | `MAX_CODEX_CONCURRENCY` | `2` | concurrent Codex processes |
@@ -207,7 +208,7 @@ All settings are env vars (or `.env` entries); defaults in
 ## Development
 
 ```sh
-uv run pytest          # 37 tests, no API key needed (scripted mock LLM + fake codex binary)
+uv run pytest          # 53 tests, no API key needed (scripted mock LLM + fake codex binary)
 cd ui && npm run build # type-checks the web UI
 ```
 
