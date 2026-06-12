@@ -53,7 +53,9 @@ def _fake_codex(tmp_path: Path, body: str) -> Path:
 @pytest.fixture(autouse=True)
 def _restore_codex_binary():
     yield
-    os.environ.pop("CODEX_BINARY", None)
+    # back to the conftest guard (fail-fast stub), not an unset var that
+    # would let a later test reach the real codex binary
+    os.environ["CODEX_BINARY"] = "false"
 
 
 async def test_run_codex_success_and_idempotency(tmp_path):
