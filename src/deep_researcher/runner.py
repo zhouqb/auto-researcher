@@ -54,6 +54,9 @@ def build_app() -> App:
 
 
 def build_runner() -> Runner:
+    from .observability import setup_observability
+
+    setup_observability()
     settings = get_settings()
     catalog = ArtifactCatalog(settings.db_path)
     return Runner(

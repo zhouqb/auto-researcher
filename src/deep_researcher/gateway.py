@@ -37,6 +37,9 @@ from .storage import ArtifactCatalog, LocalArtifactService
 def create_gateway() -> FastAPI:
     from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
 
+    from .observability import setup_observability
+
+    setup_observability()
     settings = get_settings()
     catalog = ArtifactCatalog(settings.db_path)
     session_service = DatabaseSessionService(db_url=settings.session_db_url)

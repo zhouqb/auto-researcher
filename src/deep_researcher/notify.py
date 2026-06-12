@@ -7,10 +7,13 @@ a failed notification must not break a run.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 
 from .config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def notify(title: str, message: str) -> None:
@@ -30,7 +33,7 @@ def notify(title: str, message: str) -> None:
                 capture_output=True, timeout=5, check=False,
             )
     except Exception:
-        pass
+        logger.debug("desktop notification failed", exc_info=True)
     if settings.notify_webhook_url:
         try:
             import httpx
@@ -41,7 +44,7 @@ def notify(title: str, message: str) -> None:
                 timeout=5,
             )
         except Exception:
-            pass
+            logger.warning("notification webhook failed", exc_info=True)
 
 
 def _esc(text: str) -> str:
