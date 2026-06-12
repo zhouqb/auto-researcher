@@ -28,7 +28,15 @@ DATA_ROOT=~/data/deep-researcher # optional, this is the default
 
 ## Run
 
-Steering UI (chat + plan-approval gate + artifact browser):
+Full UI (Next.js + AG-UI: chat, run monitor with kill-branch, board,
+artifact browser with lineage):
+
+```sh
+uv run uvicorn deep_researcher.gateway:app --port 8042   # terminal 1
+cd ui && npm install && npm run dev                      # terminal 2 → http://localhost:3000
+```
+
+Lightweight fallback UI (Streamlit):
 
 ```sh
 uv run streamlit run app/streamlit_app.py

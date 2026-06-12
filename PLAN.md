@@ -141,12 +141,40 @@ catalog from day one. Streamlit steering UI + terminal REPL.
       prescribed the branch split — instruction now makes explicit user
       requests override that judgment).
 
-**Deferred to Phase 3b (UI) / later**
-- Next.js + AG-UI app (lineage click-through, board drag, budget meter,
-  live sub-agent event streaming)
+**Deferred**
 - Gate 3 mid-run review (needs async jobs decoupled from the chat turn)
 - Elo numbers on the tournament (pairwise judge ranking suffices at N≤6
   candidates; Elo earns its keep with evolution rounds)
+
+## Phase 3b — Gateway + Next.js/AG-UI app ✅ (complete 2026-06-11)
+
+- [x] `gateway.py` — FastAPI: AG-UI chat plane at `/agui` via `ag_ui_adk`
+      middleware (`ADKAgent.from_app`, thread id == project id, SQLite
+      services, no session GC, messages-snapshot rehydration) + REST API
+      (projects, history, status/resume, artifacts + content + lineage,
+      runs + kill, board, budget) with CORS for the UI dev server.
+      Run: `uv run uvicorn deep_researcher.gateway:app --port 8042`
+- [x] `ui/` — Next.js 16 + CopilotKit v2 (`CopilotChat` bound to the
+      project's thread) + Tailwind: project sidebar, chat, Runs pane
+      (3s polling, budget meter, kill-branch button), Board pane, Artifacts
+      pane (markdown + KaTeX via remark-math/rehype-katex, Vega-Lite via
+      react-vega `VegaEmbed`, images, version selector, lineage
+      click-through), resume banner. Run: `cd ui && npm run dev`
+- [x] validation: gateway REST tests (4); `npm run build` clean; live AG-UI
+      SSE round-trip through `/agui` (RUN_STARTED → streamed deltas →
+      RUN_FINISHED with correct project context); Playwright screenshots of
+      Runs/Board/Artifacts panes against the real demo projects
+
+**Decisions (vs. design doc)**
+- AG-UI + CopilotKit chosen over hand-rolled SSE (the design's recommended
+  default): `ag_ui_adk` is officially documented for ADK and handles
+  streaming + session mapping; the REST panes stay plain FastAPI.
+- Chat history renders after the first run on a thread (AG-UI snapshot
+  semantics); the gateway's `/history` endpoint exists if pre-run hydration
+  is wanted later.
+- CopilotKit's dev-mode inspector overlay (`cpk-web-inspector`) intercepts
+  clicks in `next dev`; absent in production builds.
+- Streamlit app retained as the lightweight fallback UI.
 
 ## Phase 4 — Hardening
 
