@@ -43,6 +43,8 @@ def _agent_from_request(llm_request: LlmRequest) -> str:
         return "experiment_designer"
     if "analyze experiment results" in si:
         return "result_analyst"
+    if "scientific critic" in si:
+        return "critic"
     return "orchestrator"
 
 

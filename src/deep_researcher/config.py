@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     compaction_interval: int = 40
     compaction_overlap: int = 8
 
+    # Notifications (design §11.4).
+    desktop_notifications: bool = True
+    notify_webhook_url: Optional[str] = None
+
     @property
     def root(self) -> Path:
         return self.data_root.expanduser()

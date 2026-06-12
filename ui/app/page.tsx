@@ -7,6 +7,7 @@ import Sidebar from "@/components/Sidebar";
 import BoardPane from "@/components/BoardPane";
 import RunsPane from "@/components/RunsPane";
 import ArtifactsPane from "@/components/ArtifactsPane";
+import Dashboard from "@/components/Dashboard";
 import { api } from "@/lib/api";
 
 const TABS = ["Runs", "Board", "Artifacts"] as const;
@@ -97,9 +98,7 @@ export default function Home() {
             </section>
           </>
         ) : (
-          <main className="flex flex-1 items-center justify-center text-sm text-zinc-500">
-            Select or create a project to begin.
-          </main>
+          <Dashboard onSelect={setProjectId} />
         )}
       </div>
     </CopilotKit>

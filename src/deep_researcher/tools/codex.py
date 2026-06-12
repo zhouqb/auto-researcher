@@ -22,6 +22,7 @@ from google.genai import types
 
 from ..codex import CodexRunResult, prepare_workspace, run_codex
 from ..config import get_settings
+from ..notify import notify
 from ..storage.jobs import JobsStore
 
 BUDGET_FILE = "budget/budget.json"
@@ -112,6 +113,10 @@ async def _run_branch(
             _jobs().finish(job_id, result.status)
         elif result.status in ("failed", "killed"):
             result.status = "killed"
+        notify(
+            f"Experiment {branch}: {result.status}",
+            f"{project_id} · run {run_id} · {result.wallclock_s:.0f}s",
+        )
     return result, run_id
 
 
