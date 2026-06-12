@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     semantic_scholar_api_key: Optional[str] = None
     # Optional: joins OpenAlex's "polite pool" (faster, more consistent).
     openalex_mailto: Optional[str] = None
+    # Optional: enables search_web (engineering blogs/docs via Tavily).
+    tavily_api_key: Optional[str] = None
+    # Optional: raises GitHub search rate limits (falls back to `gh auth token`).
+    github_token: Optional[str] = None
 
     app_name: str = "deep_researcher"
     data_root: Path = Path("~/data/deep-researcher")

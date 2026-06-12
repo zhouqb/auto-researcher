@@ -59,7 +59,7 @@ recorded (`checkpoints/`, `decisions.md`).
 | Orchestration | Google ADK (LoopAgent/ParallelAgent, sessions, resumability) |
 | Models | DeepSeek via LiteLLM (`deepseek/deepseek-chat`; swappable in config) |
 | Code experiments | OpenAI Codex CLI, `--sandbox workspace-write`, via your ChatGPT login |
-| Literature search | OpenAlex (primary), arXiv, Semantic Scholar (with API key) |
+| Literature search | OpenAlex (primary), arXiv, OpenReview (peer-review signal), GitHub (implementations), Tavily web search (blogs, optional key), Semantic Scholar (optional key) |
 | State | One SQLite file + plain files under `DATA_ROOT` — backup = copy a folder |
 | UI | Next.js + AG-UI/CopilotKit (full) · Streamlit (lightweight) · CLI |
 
@@ -81,6 +81,8 @@ Add keys to `~/.env`, a project-local `.env`, or your shell profile:
 
 ```sh
 DEEPSEEK_API_KEY=sk-...          # required — drives all agents
+TAVILY_API_KEY=tvly-...          # optional: enables web search for engineering blogs
+GITHUB_TOKEN=ghp_...             # optional: raises GitHub search limits (else falls back to `gh auth token`)
 SEMANTIC_SCHOLAR_API_KEY=...     # optional: unlocks S2 search (unauth pool is heavily rate-limited)
 OPENALEX_MAILTO=you@example.com  # optional: OpenAlex "polite pool" (faster, more reliable)
 NOTIFY_WEBHOOK_URL=https://...   # optional: Slack-style webhook on run completion

@@ -33,8 +33,11 @@ from ..tools import (
     save_plan,
     search_arxiv,
     search_experiences,
+    search_github,
     search_openalex,
+    search_openreview,
     search_semantic_scholar,
+    search_web,
     update_board,
     write_artifact,
 )
@@ -52,7 +55,10 @@ def _make_lit_searcher(index: int, model: LiteLlm) -> LlmAgent:
         description=f"Literature searcher for facet #{index} of the research plan.",
         disallow_transfer_to_parent=True,
         disallow_transfer_to_peers=True,
-        tools=[search_openalex, search_arxiv, search_semantic_scholar, write_artifact],
+        tools=[
+            search_openalex, search_arxiv, search_openreview, search_github,
+            search_web, search_semantic_scholar, write_artifact,
+        ],
         output_key=f"lit_notes_{index}",
         instruction=f"""You are literature searcher #{index} on a research team.
 
@@ -61,17 +67,22 @@ Your assigned facet: {{facet_{index}?}}
 If the facet above is empty or missing, respond exactly "No facet assigned." and make no tool calls.
 
 Otherwise:
-1. Run 2-4 searches with search_openalex and search_arxiv, varying keywords.
-   {_TOOL_DISCIPLINE} Use search_semantic_scholar only if the others return errors.
-2. Pick the 5-10 most relevant papers (favor recency and citation count; include
-   seminal works where relevant).
+1. Run 2-5 searches, varying keywords. {_TOOL_DISCIPLINE}
+   Tool guide: search_openalex + search_arxiv are your primary paper indexes;
+   search_openreview adds peer-review signal (venue decisions, review links)
+   for ML venues; search_github finds implementations and adoption signal
+   (stars) when the facet concerns a method or tool; search_web covers
+   engineering blogs/docs the indexes miss (skip it if it reports it is not
+   configured). Use search_semantic_scholar only if the others return errors.
+2. Pick the 5-10 most relevant sources (favor recency and citation count;
+   include seminal works where relevant).
 3. Save notes with write_artifact to filename 'lit/facet_{index}/notes.md'
-   (kind 'lit_notes'): the facet, one entry per paper (title, authors, year,
-   venue, citation count, arXiv id or DOI, url, 2-4 sentence relevance note),
-   then a "Key takeaways" section.
+   (kind 'lit_notes'): the facet, one entry per source (title, authors, year,
+   venue, citation count or stars, arXiv id or DOI, url, 2-4 sentence
+   relevance note), then a "Key takeaways" section.
 4. End with a structured summary as your final response: the facet, 3-6 key
    findings, the top 5 references (title, year, url), and the artifact filename.
-Never invent papers; only cite what the search tools returned.""",
+Never invent sources; only cite what the search tools returned.""",
     )
 
 
@@ -210,14 +221,16 @@ def _build_experiment_designer(model: LiteLlm) -> LlmAgent:
         ),
         disallow_transfer_to_parent=True,
         disallow_transfer_to_peers=True,
-        tools=[read_artifact, write_artifact],
+        tools=[read_artifact, write_artifact, search_github],
         output_key="exp_spec_summary",
         instruction=f"""You design focused, code-expressible experiments.
 
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'brief/research_brief.md', then 'plan/plan.md', then
    'lit/synthesis.md'; if your request names ranked candidates, also
-   'iter_1/hypotheses.json' (one per response).
+   'iter_1/hypotheses.json' (one per response). You may use search_github
+   once to locate a reference implementation worth citing in the spec
+   (never as a dependency — experiments stay self-contained).
 2. Design the smallest experiment per requested branch that meaningfully
    tests its hypothesis on the user's local machine (CPU-friendly unless
    told otherwise; minutes not hours; standard pip-installable deps or
