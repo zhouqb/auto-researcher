@@ -95,8 +95,13 @@ kanban board, artifact browser with KaTeX/Vega rendering and lineage
 click-through):
 
 ```sh
-./scripts/dev.sh   # backend + frontend, auto-reload on code changes, Ctrl+C stops both
+./scripts/serve.sh   # stable service: backend ignores source edits (use in screen/tmux)
+./scripts/dev.sh     # development: backend auto-reloads on src/ changes
 ```
+
+Both start backend + frontend together; one Ctrl+C stops both. Use serve.sh
+for the instance you actually research with — dev.sh's auto-reload kills
+in-flight runs on every backend edit.
 
 The UI runs on http://localhost:3001 (pinned; Langfuse holds 3000).
 Or run the two halves in separate terminals:
