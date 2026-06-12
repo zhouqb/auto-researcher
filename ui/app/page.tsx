@@ -63,7 +63,13 @@ export default function Home() {
       showDevConsole={false}
     >
       <div className="flex h-screen overflow-hidden">
-        <Sidebar projectId={projectId} onSelect={setProjectId} />
+        <Sidebar
+          projectId={projectId}
+          onSelect={setProjectId}
+          onDeleted={(pid) => {
+            if (pid === projectId) setProjectId(null);
+          }}
+        />
 
         {projectId ? (
           <>

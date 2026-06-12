@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from collections import defaultdict
+from functools import lru_cache
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -32,6 +34,7 @@ from .runner import (
     slugify,
 )
 from .storage import ArtifactCatalog, LocalArtifactService
+from .storage.jobs import TERMINAL, JobsStore
 
 
 def create_gateway() -> FastAPI:
@@ -122,6 +125,31 @@ def create_gateway() -> FastAPI:
             )
         return {"id": project_id, "question": question}
 
+    @api.delete("/api/projects/{project_id}")
+    async def delete_project(project_id: str) -> dict[str, Any]:
+        """Remove a project everywhere: session, catalog rows, jobs, files."""
+        session = await session_service.get_session(
+            app_name=settings.app_name, user_id=DEFAULT_USER_ID,
+            session_id=project_id,
+        )
+        if session is None:
+            raise HTTPException(404, "no such project")
+        jobs = JobsStore(settings.db_path)
+        for job in jobs.for_project(project_id):
+            if job.status not in TERMINAL:
+                jobs.kill(job.job_id)
+        await session_service.delete_session(
+            app_name=settings.app_name, user_id=DEFAULT_USER_ID,
+            session_id=project_id,
+        )
+        artifacts_deleted = catalog.delete_project(project_id)
+        jobs.delete_project(project_id)
+        api.state.resume_locks.pop(project_id, None)
+        await asyncio.to_thread(
+            shutil.rmtree, settings.projects_dir / project_id, True
+        )
+        return {"deleted": project_id, "artifacts_deleted": artifacts_deleted}
+
     @api.get("/api/projects/{project_id}/history")
     async def history(project_id: str) -> list[dict[str, Any]]:
         session = await session_service.get_session(
@@ -153,13 +181,19 @@ def create_gateway() -> FastAPI:
     # live /agui run) must not replay the same invocation twice.
     api.state.resume_locks = defaultdict(asyncio.Lock)
 
+    # One runner for all resumes: each build_runner() opens a fresh session-db
+    # engine whose pool is never disposed (fd leak per /resume request).
+    @lru_cache(maxsize=1)
+    def resume_runner():
+        return build_runner()
+
     @api.post("/api/projects/{project_id}/resume")
     async def resume(project_id: str) -> dict[str, Any]:
         lock: asyncio.Lock = api.state.resume_locks[project_id]
         if lock.locked():
             raise HTTPException(409, "a resume is already in progress")
         async with lock:
-            runner = build_runner()
+            runner = resume_runner()
             session = await runner.session_service.get_session(
                 app_name=settings.app_name, user_id=DEFAULT_USER_ID,
                 session_id=project_id,
