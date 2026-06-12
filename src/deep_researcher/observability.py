@@ -59,6 +59,62 @@ def _setup_logging(settings: Settings) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+def provider_from_model(model_id: object) -> Optional[str]:
+    """LiteLLM model ids are 'provider/model' — e.g. 'deepseek/deepseek-chat'."""
+    if isinstance(model_id, str) and "/" in model_id:
+        return model_id.split("/", 1)[0]
+    return None
+
+
+def make_attribute_rewriter(default_system: str):
+    """Span exporter wrapper that fixes ADK's Google-centric span attributes.
+
+    ADK hardcodes ``gen_ai.system`` to 'gemini'/'vertex_ai' regardless of the
+    actual model, and namespaces its attributes under ``gcp.vertex.agent.*``
+    (google/adk telemetry has no override hook). This stack is local DeepSeek
+    via LiteLLM, so before export we (a) set gen_ai.system from the span's own
+    gen_ai.request.model, and (b) rename gcp.vertex.agent.* keys to adk.*.
+    """
+    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+    from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+
+    _WRONG_SYSTEMS = {"gemini", "vertex_ai", "gcp.vertex.agent"}
+    _VERTEX_PREFIX = "gcp.vertex.agent."
+    scope = InstrumentationScope(name="deep_researcher")
+
+    class AttributeRewriter(SpanExporter):
+        def __init__(self, delegate: SpanExporter):
+            self._delegate = delegate
+
+        def export(self, spans) -> SpanExportResult:
+            for span in spans:
+                attrs = dict(span.attributes or {})
+                rewritten = {
+                    (f"adk.{k[len(_VERTEX_PREFIX):]}" if k.startswith(_VERTEX_PREFIX) else k): v
+                    for k, v in attrs.items()
+                }
+                if rewritten.get("gen_ai.system") in _WRONG_SYSTEMS:
+                    rewritten["gen_ai.system"] = (
+                        provider_from_model(rewritten.get("gen_ai.request.model"))
+                        or default_system
+                    )
+                try:  # swap mislabeled scope ('gcp.vertex.agent') as well
+                    if (span.instrumentation_scope or scope).name.startswith("gcp."):
+                        span._instrumentation_scope = scope
+                    span._attributes = rewritten
+                except AttributeError:  # ReadableSpan internals moved; export as-is
+                    pass
+            return self._delegate.export(spans)
+
+        def shutdown(self) -> None:
+            self._delegate.shutdown()
+
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            return self._delegate.force_flush(timeout_millis)
+
+    return AttributeRewriter
+
+
 def _setup_tracing(settings: Settings) -> bool:
     config = langfuse_otlp_config(settings)
     if config is None:
@@ -72,14 +128,18 @@ def _setup_tracing(settings: Settings) -> bool:
     provider = TracerProvider(
         resource=Resource.create({"service.name": settings.app_name})
     )
+    default_system = provider_from_model(settings.orchestrator_model) or "litellm"
+    rewriter_cls = make_attribute_rewriter(default_system)
     provider.add_span_processor(
         BatchSpanProcessor(
-            OTLPSpanExporter(
-                endpoint=config["endpoint"],
-                headers={
-                    "Authorization": config["authorization"],
-                    "x-langfuse-ingestion-version": "4",
-                },
+            rewriter_cls(
+                OTLPSpanExporter(
+                    endpoint=config["endpoint"],
+                    headers={
+                        "Authorization": config["authorization"],
+                        "x-langfuse-ingestion-version": "4",
+                    },
+                )
             )
         )
     )
