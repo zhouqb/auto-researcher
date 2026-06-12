@@ -16,6 +16,7 @@ type Tab = (typeof TABS)[number];
 function ResumeBanner({ projectId }: { projectId: string }) {
   const [resumable, setResumable] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -32,14 +33,21 @@ function ResumeBanner({ projectId }: { projectId: string }) {
         disabled={busy}
         onClick={async () => {
           setBusy(true);
-          await api.resume(projectId);
-          setResumable(null);
-          setBusy(false);
+          setError(null);
+          try {
+            await api.resume(projectId);
+            setResumable(null);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+          } finally {
+            setBusy(false);
+          }
         }}
         className="rounded bg-amber-600 px-2 py-1 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
       >
         {busy ? "Resuming…" : "▶ Resume"}
       </button>
+      {error && <span className="text-red-700 dark:text-red-400">{error}</span>}
     </div>
   );
 }

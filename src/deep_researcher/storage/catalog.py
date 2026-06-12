@@ -240,18 +240,23 @@ class ArtifactCatalog:
                 )
 
     def search(self, query: str, *, project_id: Optional[str] = None, limit: int = 20) -> list[ArtifactRecord]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """SELECT a.* FROM artifact_fts f
-                   JOIN artifacts a ON a.id = f.artifact_id
-                   WHERE artifact_fts MATCH ?
-                   ORDER BY rank LIMIT ?""",
-                (query, limit),
-            ).fetchall()
-        records = [_row_to_record(r) for r in rows]
+        from .fts import sanitize_fts_query
+
+        fts_query = sanitize_fts_query(query)
+        if fts_query is None:
+            return []
+        sql = """SELECT a.* FROM artifact_fts f
+                 JOIN artifacts a ON a.id = f.artifact_id
+                 WHERE artifact_fts MATCH ?"""
+        params: list[Any] = [fts_query]
         if project_id is not None:
-            records = [r for r in records if r.project_id == project_id]
-        return records
+            sql += " AND a.project_id = ?"
+            params.append(project_id)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_record(r) for r in rows]
 
     def lineage(self, art_id: str) -> list[tuple[str, str, str]]:
         """All (child, parent, relation) edges touching an artifact."""

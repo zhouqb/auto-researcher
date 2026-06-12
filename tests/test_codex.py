@@ -129,3 +129,26 @@ def test_prepare_workspace_idempotent(tmp_path):
     marker = (ws / "AGENTS.md").read_text()
     prepare_workspace(ws)  # no clobber
     assert (ws / "AGENTS.md").read_text() == marker
+
+
+async def test_stderr_flood_does_not_deadlock(tmp_path):
+    """Child writing > pipe-buffer to stderr must not hang the run (regression)."""
+    _fake_codex(tmp_path, """
+# 256KB of stderr before any stdout: deadlocks unless stderr is drained
+i=0
+while [ $i -lt 64 ]; do
+  head -c 4096 /dev/zero | tr '\\0' 'e' >&2
+  i=$((i+1))
+done
+echo '{"type":"thread.started","thread_id":"t-stderr"}'
+echo '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":1}}'
+""")
+    import time
+    t0 = time.time()
+    result = await run_codex(
+        workspace=tmp_path / "ws", prompt="x",
+        run_dir=tmp_path / "runs" / "rs", run_id="rs", timeout_s=20,
+    )
+    assert result.status == "completed"
+    assert result.thread_id == "t-stderr"
+    assert time.time() - t0 < 15, "run should finish promptly, not hit timeout"

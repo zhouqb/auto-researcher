@@ -19,6 +19,7 @@ __all__ = [
     "save_plan",
     "search_arxiv",
     "search_experiences",
+    "search_openalex",
     "search_semantic_scholar",
     "update_board",
     "write_artifact",

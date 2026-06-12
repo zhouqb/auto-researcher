@@ -20,6 +20,7 @@ import json
 import os
 import signal
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -149,7 +150,7 @@ async def run_codex(
         except ProcessLookupError:
             pass
 
-    async def _consume() -> None:
+    async def _consume_stdout() -> None:
         with events_path.open("a") as sink:
             assert proc.stdout is not None
             async for raw in proc.stdout:
@@ -158,10 +159,21 @@ async def run_codex(
                 sink.flush()
                 parse_event_line(line, acc)
 
+    # stderr must be drained CONCURRENTLY: a child filling the ~64KB pipe
+    # buffer would otherwise block and hang the run until timeout.
+    stderr_chunks: deque[bytes] = deque(maxlen=64)  # keep only the tail
+
+    async def _consume_stderr() -> None:
+        assert proc.stderr is not None
+        while chunk := await proc.stderr.read(4096):
+            stderr_chunks.append(chunk)
+
     status = "completed"
     error: Optional[str] = None
     try:
-        await asyncio.wait_for(_consume(), timeout=timeout_s)
+        await asyncio.wait_for(
+            asyncio.gather(_consume_stdout(), _consume_stderr()), timeout=timeout_s
+        )
         await proc.wait()
     except asyncio.TimeoutError:
         status = "timeout"
@@ -172,9 +184,7 @@ async def run_codex(
             pass
         await proc.wait()
 
-    stderr_tail = ""
-    if proc.stderr is not None:
-        stderr_tail = (await proc.stderr.read()).decode("utf-8", errors="replace")[-2000:]
+    stderr_tail = b"".join(stderr_chunks).decode("utf-8", errors="replace")[-2000:]
 
     if status == "completed" and (proc.returncode != 0 or acc.turn_failed):
         if proc.returncode in (-signal.SIGTERM, -signal.SIGKILL):

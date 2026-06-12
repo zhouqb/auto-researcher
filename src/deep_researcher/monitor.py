@@ -32,11 +32,23 @@ class RunInfo:
     events_path: Optional[Path] = None
 
 
+# (mtime_ns, size) → ParsedEvents per file: the UIs poll every few seconds,
+# and event files for long runs reach MBs — only re-parse when the file grew.
+_events_cache: dict[Path, tuple[tuple[int, int], ParsedEvents]] = {}
+
+
 def _parse_events_file(path: Path) -> ParsedEvents:
+    if not path.exists():
+        return ParsedEvents()
+    stat = path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    cached = _events_cache.get(path)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
     acc = ParsedEvents()
-    if path.exists():
-        for line in path.read_text(errors="replace").splitlines():
-            parse_event_line(line, acc)
+    for line in path.read_text(errors="replace").splitlines():
+        parse_event_line(line, acc)
+    _events_cache[path] = (stamp, acc)
     return acc
 
 
@@ -73,12 +85,16 @@ def list_runs(project_id: str) -> list[RunInfo]:
         if marker.exists():
             try:
                 result = json.loads(marker.read_text())
-                info.status = result.get("status", "completed")
+                # Precedence: an explicit user kill (jobs table) always wins
+                # over the marker the process wrote before dying — same rule
+                # as tools/codex._run_branch.
+                if job_status.get(run_dir.name) != "killed":
+                    info.status = result.get("status", "completed")
                 info.wallclock_s = result.get("wallclock_s", 0.0)
                 info.metrics = result.get("metrics")
                 info.usage = result.get("usage") or info.usage
             except json.JSONDecodeError:
-                info.status = "completed"
+                pass
         runs.append(info)
     return runs
 

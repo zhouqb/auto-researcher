@@ -62,7 +62,7 @@ export default function RunsPane({ projectId }: { projectId: string }) {
               <button
                 onClick={(e) => {
                   e.preventDefault();
-                  api.killRun(projectId, run.run_id).then(refresh);
+                  api.killRun(projectId, run.run_id).catch(() => {}).finally(refresh);
                 }}
                 className="rounded bg-red-600 px-2 py-0.5 text-xs text-white hover:bg-red-700"
               >
