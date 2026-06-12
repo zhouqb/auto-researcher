@@ -95,8 +95,15 @@ kanban board, artifact browser with KaTeX/Vega rendering and lineage
 click-through):
 
 ```sh
-uv run uvicorn deep_researcher.gateway:app --port 8042   # terminal 1: backend
-cd ui && npm run dev                                     # terminal 2 → http://localhost:3000
+./scripts/dev.sh   # backend + frontend, auto-reload on code changes, Ctrl+C stops both
+```
+
+The UI prints its URL (usually http://localhost:3001 — Langfuse holds 3000).
+Or run the two halves in separate terminals:
+
+```sh
+uv run uvicorn deep_researcher.gateway:app --port 8042 --reload --reload-dir src
+cd ui && npm run dev
 ```
 
 **Streamlit** (single-page fallback — chat, gate buttons, runs, board,
