@@ -26,6 +26,19 @@
     "vega-embed": "^7.1.0",
     "vega-lite": "^6.4.3"
   },
+  "overrides": {
+    "next": {
+      "postcss": "^8.5.15"
+    },
+    "refractor": {
+      "prismjs": "^1.30.0"
+    },
+    "@copilotkit/runtime": {
+      "uuid": "^11.1.1"
+    },
+    "@ai-sdk/google-vertex": "^4.0.145",
+    "@ai-sdk/openai-compatible": "^2.0.50"
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
