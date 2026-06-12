@@ -1,0 +1,67 @@
+"""Runtime configuration for Deep Researcher.
+
+Settings load from the environment, ``~/.env``, and a project-local ``.env``
+(later sources win). Everything lives under ``data_root`` (design §7.2):
+one SQLite database plus a ``projects/`` tree of artifacts.
+"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=(str(Path.home() / ".env"), ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # Model access. LiteLLM model ids; DeepSeek by default per project decision.
+    deepseek_api_key: Optional[str] = None
+    orchestrator_model: str = "deepseek/deepseek-chat"
+    worker_model: str = "deepseek/deepseek-chat"
+
+    # Optional: raises Semantic Scholar rate limits when present.
+    semantic_scholar_api_key: Optional[str] = None
+    # Optional: joins OpenAlex's "polite pool" (faster, more consistent).
+    openalex_mailto: Optional[str] = None
+
+    app_name: str = "deep_researcher"
+    data_root: Path = Path("~/data/deep-researcher")
+
+    # Steering knobs (design §4).
+    max_clarifying_questions: int = 3
+    max_lit_facets: int = 3
+
+    @property
+    def root(self) -> Path:
+        return self.data_root.expanduser()
+
+    @property
+    def db_path(self) -> Path:
+        return self.root / "deep_researcher.db"
+
+    @property
+    def session_db_url(self) -> str:
+        return f"sqlite+aiosqlite:///{self.db_path}"
+
+    @property
+    def projects_dir(self) -> Path:
+        return self.root / "projects"
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    settings = Settings()
+    settings.root.mkdir(parents=True, exist_ok=True)
+    settings.projects_dir.mkdir(parents=True, exist_ok=True)
+    # LiteLLM reads provider keys from the environment.
+    if settings.deepseek_api_key and not os.environ.get("DEEPSEEK_API_KEY"):
+        os.environ["DEEPSEEK_API_KEY"] = settings.deepseek_api_key
+    return settings
