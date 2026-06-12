@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     app_name: str = "deep_researcher"
     data_root: Path = Path("~/data/deep-researcher")
 
+    # Codex experiment execution (design §13).
+    codex_model: Optional[str] = None  # None → Codex CLI default
+    codex_timeout_s: float = 3600
+
     # Steering knobs (design §4).
     max_clarifying_questions: int = 3
     max_lit_facets: int = 3
