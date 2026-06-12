@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -112,12 +113,19 @@ class ArtifactCatalog:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # sqlite3's own `with conn` only manages the transaction — it never
+        # closes, and connections left to GC leak fds under steady polling.
         conn = sqlite3.connect(self._db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def register(
         self,
@@ -266,3 +274,21 @@ class ArtifactCatalog:
                 (art_id, art_id),
             ).fetchall()
         return [(r["child_id"], r["parent_id"], r["relation"]) for r in rows]
+
+    def delete_project(self, project_id: str) -> int:
+        """Drop a project's catalog rows (artifacts, FTS, lineage). Returns count."""
+        with self._connect() as conn:
+            in_project = "SELECT id FROM artifacts WHERE project_id = ?"
+            conn.execute(
+                f"DELETE FROM artifact_fts WHERE artifact_id IN ({in_project})",
+                (project_id,),
+            )
+            conn.execute(
+                f"DELETE FROM artifact_lineage WHERE child_id IN ({in_project})"
+                f" OR parent_id IN ({in_project})",
+                (project_id, project_id),
+            )
+            cursor = conn.execute(
+                "DELETE FROM artifacts WHERE project_id = ?", (project_id,)
+            )
+            return cursor.rowcount

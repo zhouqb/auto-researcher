@@ -129,3 +129,41 @@ async def test_search_project_filter_applies_in_sql(service):
     )
     hits = catalog.search("gradient convergence", project_id="target", limit=2)
     assert [h.project_id for h in hits] == ["target"]
+
+
+def test_connections_close_after_each_operation(tmp_path):
+    """`with conn` in sqlite3 only commits; stores must close explicitly.
+
+    Leaked connections exhausted the gateway's fd limit under UI polling
+    (OSError: Too many open files) — regression for the _connect fix.
+    """
+    import sqlite3
+
+    from deep_researcher.storage.experiences import ExperienceStore
+    from deep_researcher.storage.jobs import JobsStore
+
+    for store in (
+        ArtifactCatalog(tmp_path / "t.db"),
+        JobsStore(tmp_path / "t.db"),
+        ExperienceStore(tmp_path / "t.db"),
+    ):
+        with store._connect() as conn:
+            conn.execute("SELECT 1")
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            conn.execute("SELECT 1")
+
+
+def test_catalog_delete_project(tmp_path):
+    catalog = ArtifactCatalog(tmp_path / "t.db")
+    keep = catalog.register(project_id="keep", path="lit/a.md", version=0,
+                            title="kept", body_text="alpha beta")
+    a = catalog.register(project_id="doomed", path="lit/a.md", version=0,
+                         title="doomed a", body_text="gamma delta")
+    b = catalog.register(project_id="doomed", path="lit/b.md", version=0,
+                         title="doomed b", body_text="gamma delta")
+    catalog.add_lineage(b.id, a.id, "derived_from")
+    assert catalog.delete_project("doomed") == 2
+    assert catalog.list_paths(project_id="doomed") == []
+    assert catalog.lineage(b.id) == []
+    assert all(r.project_id == "keep" for r in catalog.search("gamma delta"))
+    assert catalog.get_by_id(keep.id) is not None

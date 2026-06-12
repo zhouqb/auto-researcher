@@ -10,9 +10,10 @@ from __future__ import annotations
 import os
 import signal
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -56,11 +57,18 @@ class JobsStore:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # sqlite3's own `with conn` only manages the transaction — it never
+        # closes, and connections left to GC leak fds under steady polling.
         conn = sqlite3.connect(self._db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def start(self, *, project_id: str, branch: str, run_id: str,
               pid: Optional[int] = None, pgid: Optional[int] = None) -> Job:
@@ -95,6 +103,13 @@ class JobsStore:
                 (project_id,),
             ).fetchall()
         return [_row_to_job(r) for r in rows]
+
+    def delete_project(self, project_id: str) -> int:
+        """Drop a project's job rows (kill running ones first via kill())."""
+        with self._connect() as conn:
+            return conn.execute(
+                "DELETE FROM jobs WHERE project_id = ?", (project_id,)
+            ).rowcount
 
     def kill(self, job_id: str) -> bool:
         """SIGTERM the job's process group (kill-branch). Returns True if signaled."""

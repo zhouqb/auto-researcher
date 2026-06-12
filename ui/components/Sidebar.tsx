@@ -6,13 +6,16 @@ import { api, Project } from "@/lib/api";
 export default function Sidebar({
   projectId,
   onSelect,
+  onDeleted,
 }: {
   projectId: string | null;
   onSelect: (pid: string) => void;
+  onDeleted: (pid: string) => void;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [question, setQuestion] = useState("");
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const refresh = () => api.projects().then(setProjects).catch(() => {});
   useEffect(() => {
@@ -29,6 +32,21 @@ export default function Sidebar({
       setQuestion("");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const remove = async (pid: string) => {
+    if (!confirm(`Delete project "${pid}" and all its artifacts? This cannot be undone.`))
+      return;
+    setDeleting(pid);
+    try {
+      await api.deleteProject(pid);
+      onDeleted(pid);
+    } catch (e) {
+      alert(`Delete failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setDeleting(null);
+      refresh();
     }
   };
 
@@ -53,17 +71,34 @@ export default function Sidebar({
         {projects
           .sort((a, b) => b.last_update_time - a.last_update_time)
           .map((p) => (
-            <button
+            <div
               key={p.id}
-              onClick={() => onSelect(p.id)}
-              className={`block w-full truncate rounded-md px-2 py-1.5 text-left text-xs ${
+              className={`group flex items-center rounded-md ${
                 p.id === projectId
-                  ? "bg-blue-100 font-medium text-blue-900 dark:bg-blue-950 dark:text-blue-200"
+                  ? "bg-blue-100 dark:bg-blue-950"
                   : "hover:bg-zinc-200 dark:hover:bg-zinc-800"
               }`}
             >
-              {p.id}
-            </button>
+              <button
+                onClick={() => onSelect(p.id)}
+                className={`min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs ${
+                  p.id === projectId
+                    ? "font-medium text-blue-900 dark:text-blue-200"
+                    : ""
+                }`}
+              >
+                {p.id}
+              </button>
+              <button
+                onClick={() => remove(p.id)}
+                disabled={deleting === p.id}
+                title="Delete project"
+                aria-label={`Delete project ${p.id}`}
+                className="shrink-0 px-1.5 text-xs text-zinc-400 opacity-0 hover:text-red-600 group-hover:opacity-100 disabled:opacity-100"
+              >
+                {deleting === p.id ? "…" : "✕"}
+              </button>
+            </div>
           ))}
       </div>
     </aside>

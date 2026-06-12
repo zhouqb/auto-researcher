@@ -183,3 +183,36 @@ def test_cors_allows_any_localhost_port(client):
         },
     )
     assert "access-control-allow-origin" not in r.headers
+
+
+def test_delete_project_removes_everything(client):
+    c, settings = client
+    from deep_researcher.storage import ArtifactCatalog
+    from deep_researcher.storage.jobs import JobsStore
+
+    pid = c.post("/api/projects", json={"question": "Doomed project?"}).json()["id"]
+
+    # seed: one artifact (catalog + file), one finished job
+    catalog = ArtifactCatalog(settings.db_path)
+    catalog.register(project_id=pid, path="lit/notes.md", version=0,
+                     title="notes", body_text="findings")
+    proj_dir = settings.projects_dir / pid
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    (proj_dir / "stale.txt").write_text("x")
+    jobs = JobsStore(settings.db_path)
+    jobs.start(project_id=pid, branch="main", run_id="r1")
+    jobs.finish(f"{pid}:r1", "completed")
+
+    r = c.delete(f"/api/projects/{pid}")
+    assert r.status_code == 200
+    assert r.json()["deleted"] == pid
+    assert r.json()["artifacts_deleted"] == 1
+
+    assert pid not in [p["id"] for p in c.get("/api/projects").json()]
+    assert c.get(f"/api/projects/{pid}/history").status_code == 404
+    assert catalog.list_paths(project_id=pid) == []
+    assert jobs.for_project(pid) == []
+    assert not proj_dir.exists()
+
+    # second delete: project no longer exists
+    assert c.delete(f"/api/projects/{pid}").status_code == 404
