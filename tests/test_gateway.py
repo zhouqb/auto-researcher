@@ -108,3 +108,14 @@ def test_kill_endpoint(client):
     r = c.post("/api/projects/p-kill/runs/r9/kill")
     assert r.status_code == 200
     assert store.get("p-kill:r9").status == "killed"
+
+
+def test_dashboard(client):
+    c, settings = client
+    c.post("/api/projects", json={"question": "Dashboard smoke?"})
+    cards = c.get("/api/dashboard").json()
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["id"] == "dashboard-smoke"
+    assert card["has_report"] is False
+    assert card["running_runs"] == 0 and card["total_runs"] == 0

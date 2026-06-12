@@ -176,9 +176,25 @@ catalog from day one. Streamlit steering UI + terminal REPL.
   clicks in `next dev`; absent in production builds.
 - Streamlit app retained as the lightweight fallback UI.
 
-## Phase 4 — Hardening
+## Phase 4 — Hardening ✅ (initial pass complete 2026-06-11; ongoing by nature)
 
-- leakage/usage/critique guardrails, notifications, multi-project dashboard
+- [x] critic agent (design §14): reviews report + analysis for unsupported
+      claims, data leakage/usage problems, single-seed conclusions,
+      overgeneralization; severity-tagged findings to `iter_1/critique.md`;
+      orchestrator revises the report on blocking findings and re-runs the
+      critic. Live-validated on `demo-gradfree-opt`: found 2 genuine blocking
+      issues (n=5 replicates, overgeneralization), forced a revision, and
+      re-reviewed it.
+- [x] notifications (design §11.4): desktop (macOS/Linux) + optional Slack
+      webhook (`NOTIFY_WEBHOOK_URL`) on every experiment-run completion;
+      `DESKTOP_NOTIFICATIONS=false` to disable
+- [x] multi-project dashboard: `/api/dashboard` + UI home view (cards with
+      running runs, report status, budget, artifact counts)
+- [x] `scripts/backup.sh`: timestamped tar of the data root (excludes
+      `data_store/`), keeps last 10
+- Remaining ideas (as usage demands): dedicated leakage-checker tool run
+  inside experiment workspaces, Gate 3 mid-run review on async jobs,
+  evolution rounds on the tournament
 
 ## Environment
 

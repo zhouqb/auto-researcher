@@ -64,6 +64,30 @@ def create_gateway() -> FastAPI:
 
     # -- projects ----------------------------------------------------------
 
+    @api.get("/api/dashboard")
+    async def dashboard() -> list[dict[str, Any]]:
+        """Multi-project overview: status, budget, runs, report presence."""
+        response = await session_service.list_sessions(
+            app_name=settings.app_name, user_id=DEFAULT_USER_ID
+        )
+        cards = []
+        for s in sorted(
+            response.sessions, key=lambda x: x.last_update_time or 0, reverse=True
+        ):
+            runs_info = list_runs(s.id)
+            budget_info = load_budget(s.id) or {"totals": {}}
+            proj_dir = settings.projects_dir / s.id
+            cards.append({
+                "id": s.id,
+                "last_update_time": s.last_update_time,
+                "has_report": (proj_dir / "reports/final_report.md").exists(),
+                "running_runs": sum(1 for r in runs_info if r.status == "running"),
+                "total_runs": len(runs_info),
+                "budget_totals": budget_info.get("totals", {}),
+                "artifact_count": len(catalog.list_paths(project_id=s.id)),
+            })
+        return cards
+
     @api.get("/api/projects")
     async def projects() -> list[dict[str, Any]]:
         response = await session_service.list_sessions(

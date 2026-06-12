@@ -304,6 +304,44 @@ filename, and the number of references.""",
     )
 
 
+def _build_critic(model: LiteLlm) -> LlmAgent:
+    return LlmAgent(
+        name="critic",
+        model=model,
+        description=(
+            "Reviews the project's analysis and final report for validity "
+            "before delivery: unsupported claims, data leakage/usage problems, "
+            "metric mismatch, overgeneralization. Writes 'iter_1/critique.md'. "
+            "Input: a one-line request."
+        ),
+        disallow_transfer_to_parent=True,
+        disallow_transfer_to_peers=True,
+        tools=[read_artifact, list_artifacts, write_artifact],
+        output_key="critique_summary",
+        instruction=f"""You are the project's scientific critic (design §14 guardrails).
+Your job is to find problems, not to praise.
+
+Steps ({_TOOL_DISCIPLINE}):
+1. read_artifact 'reports/final_report.md'.
+2. read_artifact 'iter_1/analysis.md' and 'iter_1/exp_spec.md' if they exist
+   (check list_artifacts when unsure).
+3. Check for, with severity (blocking | warning | note):
+   - claims in the report not supported by the literature notes or metrics
+   - DATA LEAKAGE signs: test data influencing training/tuning, metric
+     computed on data the method saw, target leakage in features
+   - DATA USAGE problems: dataset too small/synthetic for the claim's
+     breadth, baseline mis-specified or missing
+   - statistics: single-seed conclusions stated as robust, missing variance,
+     metric/objective mismatch, p-hacking patterns
+   - overgeneralization beyond the tested conditions; uncited numbers
+4. Save with write_artifact to 'iter_1/critique.md' (kind 'critique'):
+   one section per finding — severity, what, where (artifact + section),
+   suggested fix. If genuinely clean, say so and note residual limitations.
+5. End with: counts by severity and a one-line verdict
+   (deliverable / needs-revision), plus the artifact filename.""",
+    )
+
+
 def build_root_agent() -> LlmAgent:
     settings = get_settings()
     orchestrator_model = LiteLlm(model=settings.orchestrator_model)
@@ -330,6 +368,7 @@ def build_root_agent() -> LlmAgent:
             run_experiments,
             AgentTool(_build_result_analyst(worker_model)),
             AgentTool(_build_report_writer(worker_model)),
+            AgentTool(_build_critic(worker_model)),
         ],
         instruction=f"""You are the Principal Orchestrator of Deep Researcher, a
 human-steered research system. The user is the PI; you propose and execute.
@@ -403,8 +442,13 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
       lessons, method, result, and codex thread_id. Failures and
       inconclusive runs are the most valuable memory.
 
-7. REPORT. Call report_writer. Then give the user the report's conclusions
-   and filename, and append_decision is already handled by the writer.
+7. REPORT. Call report_writer.
+
+8. CRITIQUE (guardrail). Call critic. If it reports BLOCKING findings, call
+   report_writer once more with the specific fixes required, then re-run
+   critic; surface anything still blocking to the user honestly instead of
+   shipping it. Then give the user the report's conclusions, the critique
+   verdict, and both filenames.
 
 Board upkeep: after each stage completes (literature, experiment, analysis,
 report), call update_board moving the corresponding items to 'done' (or
