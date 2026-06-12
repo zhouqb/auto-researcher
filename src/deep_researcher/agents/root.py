@@ -31,34 +31,27 @@ from ..tools import (
     record_checkpoint,
     record_experience,
     save_plan,
-    search_arxiv,
     search_experiences,
     search_github,
-    search_openalex,
-    search_openreview,
-    search_semantic_scholar,
-    search_web,
     update_board,
     write_artifact,
 )
 from ..tools.codex import codex_exec, run_experiments
+from ..tools.registry import parse_search_tools, search_tool_fns, search_tool_guide
 
 _TOOL_DISCIPLINE = (
     "Call at most ONE tool per response; wait for its result before the next call."
 )
 
 
-def _make_lit_searcher(index: int, model: LiteLlm) -> LlmAgent:
+def _make_lit_searcher(index: int, model: LiteLlm, search_names: list[str]) -> LlmAgent:
     return LlmAgent(
         name=f"lit_searcher_{index}",
         model=model,
         description=f"Literature searcher for facet #{index} of the research plan.",
         disallow_transfer_to_parent=True,
         disallow_transfer_to_peers=True,
-        tools=[
-            search_openalex, search_arxiv, search_openreview, search_github,
-            search_web, search_semantic_scholar, write_artifact,
-        ],
+        tools=[*search_tool_fns(search_names), write_artifact],
         output_key=f"lit_notes_{index}",
         instruction=f"""You are literature searcher #{index} on a research team.
 
@@ -68,12 +61,7 @@ If the facet above is empty or missing, respond exactly "No facet assigned." and
 
 Otherwise:
 1. Run 2-5 searches, varying keywords. {_TOOL_DISCIPLINE}
-   Tool guide: search_openalex + search_arxiv are your primary paper indexes;
-   search_openreview adds peer-review signal (venue decisions, review links)
-   for ML venues; search_github finds implementations and adoption signal
-   (stars) when the facet concerns a method or tool; search_web covers
-   engineering blogs/docs the indexes miss (skip it if it reports it is not
-   configured). Use search_semantic_scholar only if the others return errors.
+   {search_tool_guide(search_names)}
 2. Pick the 5-10 most relevant sources (favor recency and citation count;
    include seminal works where relevant).
 3. Save notes with write_artifact to filename 'lit/facet_{index}/notes.md'
@@ -86,11 +74,15 @@ Never invent sources; only cite what the search tools returned.""",
     )
 
 
-def _build_literature_review(worker_model: LiteLlm, n: int) -> SequentialAgent:
+def _build_literature_review(
+    worker_model: LiteLlm, n: int, search_names: list[str]
+) -> SequentialAgent:
     lit_fanout = ParallelAgent(
         name="lit_fanout",
         description="Runs literature searchers over distinct facets in parallel.",
-        sub_agents=[_make_lit_searcher(i + 1, worker_model) for i in range(n)],
+        sub_agents=[
+            _make_lit_searcher(i + 1, worker_model, search_names) for i in range(n)
+        ],
     )
     summaries_block = "\n".join(
         f"[facet {i + 1}] {{lit_notes_{i + 1}?}}" for i in range(n)
@@ -207,7 +199,14 @@ Candidates:
     )
 
 
-def _build_experiment_designer(model: LiteLlm) -> LlmAgent:
+def _build_experiment_designer(model: LiteLlm, github_enabled: bool) -> LlmAgent:
+    github_note = (
+        """ You may use search_github
+   once to locate a reference implementation worth citing in the spec
+   (never as a dependency — experiments stay self-contained)."""
+        if github_enabled
+        else ""
+    )
     return LlmAgent(
         name="experiment_designer",
         model=model,
@@ -221,16 +220,15 @@ def _build_experiment_designer(model: LiteLlm) -> LlmAgent:
         ),
         disallow_transfer_to_parent=True,
         disallow_transfer_to_peers=True,
-        tools=[read_artifact, write_artifact, search_github],
+        tools=[read_artifact, write_artifact]
+        + ([search_github] if github_enabled else []),
         output_key="exp_spec_summary",
         instruction=f"""You design focused, code-expressible experiments.
 
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'brief/research_brief.md', then 'plan/plan.md', then
    'lit/synthesis.md'; if your request names ranked candidates, also
-   'iter_1/hypotheses.json' (one per response). You may use search_github
-   once to locate a reference implementation worth citing in the spec
-   (never as a dependency — experiments stay self-contained).
+   'iter_1/hypotheses.json' (one per response).{github_note}
 2. Design the smallest experiment per requested branch that meaningfully
    tests its hypothesis on the user's local machine (CPU-friendly unless
    told otherwise; minutes not hours; standard pip-installable deps or
@@ -359,6 +357,7 @@ def build_root_agent() -> LlmAgent:
     settings = get_settings()
     orchestrator_model = LiteLlm(model=settings.orchestrator_model)
     worker_model = LiteLlm(model=settings.worker_model)
+    search_names = parse_search_tools(settings.search_tools)
 
     return LlmAgent(
         name="orchestrator",
@@ -374,9 +373,15 @@ def build_root_agent() -> LlmAgent:
             append_decision,
             search_experiences,
             record_experience,
-            AgentTool(_build_literature_review(worker_model, settings.max_lit_facets)),
+            AgentTool(
+                _build_literature_review(
+                    worker_model, settings.max_lit_facets, search_names
+                )
+            ),
             AgentTool(_build_idea_tournament(worker_model)),
-            AgentTool(_build_experiment_designer(worker_model)),
+            AgentTool(
+                _build_experiment_designer(worker_model, "github" in search_names)
+            ),
             codex_exec,
             run_experiments,
             AgentTool(_build_result_analyst(worker_model)),
