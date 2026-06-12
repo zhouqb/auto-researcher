@@ -20,18 +20,20 @@ class SearchTool(NamedTuple):
 
 
 SEARCH_TOOL_REGISTRY: dict[str, SearchTool] = {
-    "openalex": SearchTool(
-        search_openalex,
-        "search_openalex is your primary paper index (citations, venues)",
+    "semantic_scholar": SearchTool(
+        search_semantic_scholar,
+        "search_semantic_scholar is your primary paper index (best relevance "
+        "and recency on ML topics, with TLDR summaries)",
     ),
     "arxiv": SearchTool(
         search_arxiv,
         "search_arxiv covers the latest preprints",
     ),
-    "semantic_scholar": SearchTool(
-        search_semantic_scholar,
-        "search_semantic_scholar is a fallback paper index (rate-limited "
-        "without a key — use it only if the other indexes return errors)",
+    "openalex": SearchTool(
+        search_openalex,
+        "search_openalex is a secondary paper index — strong on older and "
+        "cross-domain literature, but its ranking favors citations over "
+        "relevance, so verify topical fit",
     ),
     "openreview": SearchTool(
         search_openreview,

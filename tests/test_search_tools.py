@@ -52,16 +52,20 @@ def test_guide_mentions_only_enabled_tools():
         assert f"search_{name}" not in guide
 
 
-def test_default_set_is_lean_trio():
+def test_default_set_is_s2_primary_quartet():
     assert parse_search_tools(config_mod.Settings().search_tools) == [
-        "openalex", "arxiv", "github",
+        "semantic_scholar", "arxiv", "openalex", "github",
     ]
     root = build_root_agent()
     lit = _agent_tool(root, "literature_review")
     searcher = lit.sub_agents[0].sub_agents[0]  # lit_fanout → lit_searcher_1
     names = _tool_names(searcher)
-    assert names == ["search_openalex", "search_arxiv", "search_github", "write_artifact"]
-    for off in ("search_semantic_scholar", "search_openreview", "search_web"):
+    assert names == [
+        "search_semantic_scholar", "search_arxiv", "search_openalex",
+        "search_github", "write_artifact",
+    ]
+    assert "search_semantic_scholar is your primary paper index" in searcher.instruction
+    for off in ("search_openreview", "search_web"):
         assert off not in searcher.instruction
     designer = _agent_tool(root, "experiment_designer")
     assert "search_github" in _tool_names(designer)
