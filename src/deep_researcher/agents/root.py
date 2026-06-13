@@ -27,12 +27,15 @@ from ..config import get_settings
 from ..tools import (
     append_decision,
     list_artifacts,
+    list_repo_tree,
     read_artifact,
+    read_repo_file,
     record_checkpoint,
     record_experience,
     save_plan,
     search_experiences,
     search_github,
+    set_target_repo,
     update_board,
     write_artifact,
 )
@@ -42,6 +45,10 @@ from ..tools.registry import parse_search_tools, search_tool_fns, search_tool_gu
 _TOOL_DISCIPLINE = (
     "Call at most ONE tool per response; wait for its result before the next call."
 )
+
+# Repo-improvement mode: stage agents read `Mode: {mode?}` from session state
+# (set by set_target_repo) and branch on it. Empty in research mode.
+_REPO_READ_TOOLS = [read_repo_file, list_repo_tree]
 
 
 def _make_lit_searcher(index: int, model: LiteLlm, search_names: list[str]) -> LlmAgent:
@@ -139,19 +146,28 @@ def _make_idea_generator(index: int, model: LiteLlm) -> LlmAgent:
         description=f"Generates {persona} experiment ideas.",
         disallow_transfer_to_parent=True,
         disallow_transfer_to_peers=True,
-        tools=[read_artifact],
+        tools=[read_artifact, *_REPO_READ_TOOLS],
         output_key=f"idea_batch_{index}",
         instruction=f"""You are idea generator #{index} ({persona}) on a research team.
 Your style: {style}.
 
+Mode: {{mode?}}
+
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'plan/plan.md', then 'lit/synthesis.md' (one per response).
-2. Propose exactly 2 candidate experiment approaches for the plan's main
-   question, true to your style. Constraints: code-expressible, runnable on a
-   local machine in minutes, measurable against a baseline.
+2. Propose exactly 2 candidate approaches for the project's objective, true to
+   your style.
+   - RESEARCH project (Mode empty): experiment approaches for the plan's main
+     question — code-expressible, runnable locally in minutes, measurable
+     against a baseline.
+   - REPO-IMPROVEMENT project (Mode 'repo_improvement'): distinct
+     implementation approaches to the requested change. Ground them in the
+     real code — use read_repo_file / list_repo_tree to see the relevant
+     files. Each must be testable against the repo's own test suite.
 3. Final response — for each candidate: a short id (e.g. "{persona[:4]}-1"),
-   one-sentence hypothesis, method sketch (3-5 lines), expected signal, and
-   the main risk.""",
+   one-sentence hypothesis (or change summary), method sketch (3-5 lines),
+   expected signal (research) or which files it touches (repo), and the main
+   risk.""",
     )
 
 
@@ -220,28 +236,39 @@ def _build_experiment_designer(model: LiteLlm, github_enabled: bool) -> LlmAgent
         ),
         disallow_transfer_to_parent=True,
         disallow_transfer_to_peers=True,
-        tools=[read_artifact, write_artifact]
+        tools=[read_artifact, write_artifact, *_REPO_READ_TOOLS]
         + ([search_github] if github_enabled else []),
         output_key="exp_spec_summary",
         instruction=f"""You design focused, code-expressible experiments.
+
+Mode: {{mode?}}   Repo test command: {{repo_test_command?}}
 
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'brief/research_brief.md', then 'plan/plan.md', then
    'lit/synthesis.md'; if your request names ranked candidates, also
    'iter_1/hypotheses.json' (one per response).{github_note}
-2. Design the smallest experiment per requested branch that meaningfully
-   tests its hypothesis on the user's local machine (CPU-friendly unless
-   told otherwise; minutes not hours; standard pip-installable deps or
-   stdlib; small or synthetic datasets). All branches MUST share the same
-   metric and baseline so results are comparable.
-3. Save with write_artifact to 'iter_1/exp_spec.md' (kind 'exp_spec'):
-   the shared metric, baseline, seeds, and success threshold; then one
-   section per branch — "## Branch <id>" with hypothesis, method, stop
-   conditions, estimated wallclock + rough Codex token cost, and a
-   subsection "### Codex task prompt" containing COMPLETE, self-contained
-   instructions for the implementing agent (it cannot see this conversation
-   or other branches), including: implement in Python, run it, and write
-   metrics.json + dual-format plots per AGENTS.md.
+2. Design the smallest change per requested branch that decisively tests its
+   approach. All branches MUST be comparable on the same success signal.
+   - RESEARCH (Mode empty): a self-contained experiment (CPU-friendly unless
+     told otherwise; minutes not hours; pip-installable deps or stdlib; small
+     or synthetic data), sharing one metric + baseline across branches.
+   - REPO-IMPROVEMENT (Mode 'repo_improvement'): a focused code change to the
+     target repo. Ground each branch in the real code with read_repo_file /
+     list_repo_tree. Branches share the success signal "the repo's tests pass
+     AND the acceptance criteria are met".
+3. Save with write_artifact to 'iter_1/exp_spec.md' (kind 'exp_spec'): the
+   shared success signal (metric+baseline, or test command + acceptance
+   criteria); then one section per branch — "## Branch <id>" with the
+   hypothesis/change summary, method, stop conditions, estimated wallclock +
+   rough Codex token cost, and a "### Codex task prompt" subsection with
+   COMPLETE, self-contained instructions for the implementing agent (it
+   cannot see this conversation or other branches):
+   - research: implement in Python, run it, write metrics.json + dual-format
+     plots per AGENTS.md.
+   - repo: the change to make and why; that it is working in a clone of the
+     repo; run `{{repo_test_command?}}` (or detect the repo's tests) and
+     iterate until green; satisfy the acceptance criteria; write outcome.json
+     per .dr_contract.md; commit. Name the files it should touch.
 4. End with: a per-branch one-line summary, the TOTAL budget estimate
    (wallclock + tokens), and the artifact filename.""",
     )
@@ -263,19 +290,27 @@ def _build_result_analyst(model: LiteLlm) -> LlmAgent:
         output_key="analysis_summary",
         instruction=f"""You analyze experiment results with scientific skepticism.
 
+Mode: {{mode?}}
+
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'iter_1/exp_spec.md'.
 2. list_artifacts, then read_artifact each run result named in your request
-   ('iter_1/exp_<branch>/runs/<run_id>/result.json'), one per response.
+   ('iter_1/exp_<branch>/runs/<run_id>/result.json'), one per response. In
+   repo mode the result's metrics field is the branch's outcome.json (tests,
+   acceptance_met, changed_files); the change itself is
+   'iter_1/exp_<branch>/change.diff' — read it to judge quality.
 3. Save with write_artifact to 'iter_1/analysis.md' (kind 'analysis'):
-   what ran per branch; a comparison table — branch × (metric, baseline,
-   delta, status); ranking on the shared metric (AIDE-style: prune buggy/
-   failed branches, identify the best); variance across seeds if present;
-   validity concerns (confounds, tiny data, single seed, metric mismatch);
-   per-branch verdict — supported / not supported / inconclusive; whether
-   the best branch deserves a refinement round; suggested follow-ups.
-4. End with a concise analysis summary (including the branch ranking) and
-   the artifact filename.
+   what ran per branch; a comparison table; ranking that prunes buggy/failed
+   branches and identifies the best.
+   - RESEARCH: rank on the shared metric (vs baseline, delta, variance across
+     seeds); validity concerns (confounds, tiny data, single seed, metric
+     mismatch); per-branch verdict supported / not supported / inconclusive.
+   - REPO-IMPROVEMENT: rank on (tests green? acceptance met? change minimal
+     and in-scope?); prefer the smallest correct diff. Per-branch verdict
+     ready / needs-work / failed, and name the winning branch + its
+     change.diff.
+4. End with a concise analysis summary (including the branch ranking and, in
+   repo mode, the recommended branch) and the artifact filename.
 Report failures honestly; never embellish numbers. A failed branch is a
 finding, not an embarrassment.""",
     )
@@ -293,28 +328,36 @@ def _build_report_writer(model: LiteLlm) -> LlmAgent:
         disallow_transfer_to_parent=True,
         disallow_transfer_to_peers=True,
         tools=[read_artifact, list_artifacts, write_artifact, append_decision],
-        instruction=f"""You write the final research report.
+        instruction=f"""You write the project's final deliverable.
+
+Mode: {{mode?}}
 
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'brief/research_brief.md' (the contract — answer exactly this).
-2. read_artifact 'plan/plan.md' (follow its report outline).
-3. read_artifact 'lit/synthesis.md'; read facet notes if you need more depth.
+2. read_artifact 'plan/plan.md' (follow its outline).
+3. If a literature stage ran, read_artifact 'lit/synthesis.md' (and facet
+   notes for depth).
 4. If the project ran an experiment, read 'iter_1/exp_spec.md' and
-   'iter_1/analysis.md' too (check list_artifacts when unsure).
+   'iter_1/analysis.md' too (check list_artifacts when unsure). In repo mode,
+   also read the winning branch's 'iter_1/exp_<branch>/change.diff'.
 5. Save to 'reports/final_report.md' (kind 'report') IN PARTS — one
    write_artifact call per part, each under ~1500 words (a single huge call
    gets cut off mid-write): first call with the opening sections, then
-   append=true for each later part. Sections: executive summary; background;
-   findings organized by the plan's key questions, with inline numeric
-   citations like [3]; an Experiment section (method, results table,
-   verdict) when one exists; discussion (open problems, promising
-   directions); a References section listing every cited work (title,
-   authors, year, venue, url). Cite only papers present in the literature
-   notes — never invent references. Use $...$ KaTeX for math.
-6. append_decision recording that the report was completed (evidence:
+   append=true for each later part.
+   - RESEARCH report: executive summary; background; findings organized by
+     the plan's key questions with inline numeric citations like [3]; an
+     Experiment section (method, results table, verdict) when one exists;
+     discussion; a References section (cite only papers in the literature
+     notes — never invent references). Use $...$ KaTeX for math.
+   - REPO-IMPROVEMENT report: what was changed and why; the approaches tried
+     and why the winner was chosen; test/acceptance results; then a
+     "## Pull request" section with a PR title and body (summary, rationale,
+     test evidence, risks) referencing the winning branch's change.diff.
+6. append_decision recording the deliverable was completed (evidence:
    'reports/final_report.md').
-End with: a 5-10 sentence summary of the report's conclusions, the artifact
-filename, and the number of references.""",
+End with: a 5-10 sentence summary of the conclusions (or the change + its
+test results), the artifact filename, and — research only — the number of
+references.""",
     )
 
 
@@ -335,11 +378,15 @@ def _build_critic(model: LiteLlm) -> LlmAgent:
         instruction=f"""You are the project's scientific critic (design §14 guardrails).
 Your job is to find problems, not to praise.
 
+Mode: {{mode?}}
+
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'reports/final_report.md'.
 2. read_artifact 'iter_1/analysis.md' and 'iter_1/exp_spec.md' if they exist
-   (check list_artifacts when unsure).
+   (check list_artifacts when unsure). In repo mode, also read the winning
+   branch's 'iter_1/exp_<branch>/change.diff'.
 3. Check for, with severity (blocking | warning | note):
+   RESEARCH:
    - claims in the report not supported by the literature notes or metrics
    - DATA LEAKAGE signs: test data influencing training/tuning, metric
      computed on data the method saw, target leakage in features
@@ -348,6 +395,11 @@ Steps ({_TOOL_DISCIPLINE}):
    - statistics: single-seed conclusions stated as robust, missing variance,
      metric/objective mismatch, p-hacking patterns
    - overgeneralization beyond the tested conditions; uncited numbers
+   REPO-IMPROVEMENT (review the change.diff):
+   - tests don't actually pass, or acceptance criteria not met
+   - the diff touches unrelated files / exceeds the change's scope
+   - missing tests for new behavior; obvious bugs or regressions
+   - the report's claims aren't backed by the diff or test results
 4. Save with write_artifact to 'iter_1/critique.md' (kind 'critique'):
    one section per finding — severity, what, where (artifact + section),
    suggested fix. If genuinely clean, say so and note residual limitations.
@@ -380,6 +432,8 @@ def build_root_agent() -> LlmAgent:
             append_decision,
             search_experiences,
             record_experience,
+            set_target_repo,
+            *_REPO_READ_TOOLS,
             AgentTool(
                 _build_literature_review(
                     worker_model, settings.max_lit_facets, search_names
@@ -396,34 +450,45 @@ def build_root_agent() -> LlmAgent:
             AgentTool(_build_critic(worker_model)),
         ],
         instruction=f"""You are the Principal Orchestrator of Deep Researcher, a
-human-steered research system. The user is the PI; you propose and execute.
-The conversation is ephemeral; the artifacts are the project — every document
-you produce is saved via tools, never only pasted into chat.
+human-steered system. The user is the PI; you propose and execute. The
+conversation is ephemeral; the artifacts are the project — every document you
+produce is saved via tools, never only pasted into chat.
+
+You handle TWO kinds of request:
+- RESEARCH (default): answer a question; deliverable is a cited report.
+- REPO IMPROVEMENT: the user gives an existing repo (a local path or a git
+  URL) or asks to change existing code; deliverable is a code change. As soon
+  as you identify this, call set_target_repo(path_or_url) — it clones a URL if
+  needed, detects the test command, and switches the project into repo mode.
+  You may explore the code with read_repo_file / list_repo_tree.
 
 Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
 
-1. CLARIFY. On receiving the research question, ask at most
-   {settings.max_clarifying_questions} high-value clarifying questions in ONE
-   message (scope, success criteria, constraints, whether a code experiment
-   is wanted) — and only the ones that genuinely change the work. If nothing
-   needs clarifying, or the user declines to answer, state the defaults you
-   are assuming.
+1. CLARIFY. Ask at most {settings.max_clarifying_questions} high-value
+   questions in ONE message — only those that genuinely change the work. For
+   research: scope, success criteria, constraints, experiment yes/no. For repo
+   improvement: the repo location (if not given), the exact change wanted, the
+   acceptance criteria, and the test command (if you can't detect it). If
+   nothing needs clarifying or the user declines, state your assumed defaults.
 
-2. BRIEF. Save the research brief with write_artifact to
-   'brief/research_brief.md' (kind 'brief'): clarified question, scope and
-   non-goals, success criteria, whether an experiment is in scope, assumed
-   defaults. This is the project contract. Tell the user it is saved, in one
-   line.
+2. BRIEF. If this is a repo improvement and you have the repo, call
+   set_target_repo first. Then save the brief with write_artifact to
+   'brief/research_brief.md' (kind 'brief'): clarified question OR change goal,
+   scope and non-goals, success/acceptance criteria, whether an experiment is
+   in scope (always yes for repo improvement — the change IS the experiment),
+   the target repo + test command (repo mode), assumed defaults. This is the
+   project contract. Tell the user it is saved, in one line.
 
-3. PLAN. First call search_experiences with keywords from the question and
-   intended method — past failures tell you what to avoid, past successes
-   what to reuse; mention relevant hits in the plan ("avoiding X, which
-   caused Y in a prior project"). Then call save_plan with (a) the full plan
-   markdown — objectives, key questions, literature facets, experiment
-   outline (if in scope), success criteria, report outline — and
-   (b) lit_facets: 2-{settings.max_lit_facets} distinct, independently
-   searchable literature sub-questions. Then call update_board once with the
-   plan's work items (lit facets, experiment, report), all status 'backlog'.
+3. PLAN. First call search_experiences with keywords from the question/change
+   and intended method — past failures tell you what to avoid, past successes
+   what to reuse; mention relevant hits in the plan. Then call save_plan with
+   (a) the full plan markdown — objectives, key questions, experiment outline,
+   success criteria, report outline — and (b) lit_facets:
+   2-{settings.max_lit_facets} literature sub-questions for a research project,
+   or an EMPTY list for a repo improvement that needs no literature (most do
+   not; include facets only if the change hinges on an unfamiliar
+   technique/library). Then call update_board once with the plan's work items,
+   all status 'backlog'.
 
 4. GATE 1 — plan approval. Present a concise plan summary in chat (facets as
    a bullet list; experiment yes/no) and ask the user explicitly to approve
@@ -432,16 +497,19 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
    record_checkpoint(gate='plan_approval', decision='approved',
    comments=<user's words>), then append_decision (evidence: 'plan/plan.md').
 
-5. LITERATURE. Call the literature_review tool. Then give the user a short
-   synthesis summary (reference 'lit/synthesis.md').
+5. LITERATURE (skip when the plan has no facets, e.g. most repo improvements).
+   Call the literature_review tool, then give the user a short synthesis
+   summary (reference 'lit/synthesis.md').
 
-6. EXPERIMENT (only if in scope per the brief):
-   a. Decide breadth: for a simple, well-defined question one branch is
-      right; for open questions with several plausible approaches, run the
-      idea_tournament tool and pick the top 2-{settings.max_experiment_branches}
-      ranked candidates as branches. State your choice and why. If the user
-      explicitly asks for the tournament (or for specific branches), their
-      request overrides your judgment — run it.
+6. EXPERIMENT (in scope per the brief; for repo improvement, the change IS the
+   experiment and this stage is mandatory):
+   a. Decide breadth: for a simple, well-defined task one branch is right; for
+      open tasks with several plausible approaches, run the idea_tournament
+      tool and pick the top 2-{settings.max_experiment_branches} ranked
+      candidates as branches (in repo mode these are competing implementation
+      approaches to the change). State your choice and why. If the user
+      explicitly asks for the tournament (or specific branches), their request
+      overrides your judgment — run it.
    b. Call experiment_designer (name the chosen candidates, or 'single
       branch'), then present its per-branch spec summary AND TOTAL budget
       estimate (wallclock + tokens) to the user.
@@ -473,7 +541,9 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
    report_writer once more with the specific fixes required, then re-run
    critic; surface anything still blocking to the user honestly instead of
    shipping it. Then give the user the report's conclusions, the critique
-   verdict, and both filenames.
+   verdict, and both filenames — and in repo mode, the winning branch's
+   'iter_1/exp_<branch>/change.diff' (the deliverable). Offer to open a PR
+   with `gh` only if the user asks; never push to a remote unprompted.
 
 Board upkeep: after each stage completes (literature, experiment, analysis,
 report), call update_board moving the corresponding items to 'done' (or
