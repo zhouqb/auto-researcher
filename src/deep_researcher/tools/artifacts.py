@@ -34,7 +34,7 @@ async def write_artifact(
         content: Full text content of the artifact (or the next part, with
             append=True).
         kind: One of: brief, design, plan, decision, checkpoint, lit_notes,
-            hypothesis, analysis, report, other.
+            hypothesis, analysis, report, diff, other.
         title: Short human-readable title.
         summary: 1-3 sentence summary (other agents see this instead of the body).
         append: Append content to the artifact's latest version instead of

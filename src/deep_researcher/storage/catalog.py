@@ -65,6 +65,8 @@ _FTS_BODY_CAP = 50_000
 
 
 def guess_kind(path: str) -> str:
+    if path.endswith((".diff", ".patch")):  # repo-improvement change diffs
+        return "diff"
     prefix = path.split("/", 1)[0]
     return _KIND_BY_PREFIX.get(prefix, "other")
 

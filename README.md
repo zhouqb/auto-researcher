@@ -1,13 +1,20 @@
 # Deep Researcher
 
-A locally hosted, human-steered multi-agent research system. Give it an
-ML/AI/SWE research question and it runs the full research lifecycle —
-clarification, planning, parallel literature search, idea tournament, **real
-code experiments** (implemented and executed by OpenAI Codex in a sandbox),
-analysis, critique, and a cited final report — with you approving the plan and
-the budget before anything expensive runs.
+A locally hosted, human-steered multi-agent system. It handles two kinds of
+request:
 
-You are the PI; the system proposes and executes. Everything durable is a
+- **Research** — give it an ML/AI/SWE question and it runs the full research
+  lifecycle: clarification, planning, parallel literature search, idea
+  tournament, **real code experiments** (implemented and executed by OpenAI
+  Codex in a sandbox), analysis, critique, and a cited final report.
+- **Repo improvement** — point it at an existing repo (a local path or a git
+  URL) and describe a change. It tries competing implementation approaches in
+  parallel isolated clones, runs the repo's own tests, picks the one that goes
+  green, and hands you a `change.diff` (plus a PR description) — never touching
+  your original repo or pushing anything unprompted.
+
+In both cases you approve the plan and the budget before anything expensive
+runs. You are the PI; the system proposes and executes. Everything durable is a
 versioned, lineage-tracked artifact on your disk. The conversation is
 ephemeral; the artifacts are the project.
 
@@ -51,6 +58,31 @@ report writer ──► final_report.md ──► critic reviews; blocking findi
 You can steer at any point in chat: redirect, request plan changes, kill a
 branch from the run monitor, or stop. Every gate decision, kill, and pivot is
 recorded (`checkpoints/`, `decisions.md`).
+
+**Repo improvement** reuses the same lifecycle with the deliverable swapped:
+when you give a repo (path or URL), the system enters repo mode, usually skips
+literature, and the experiment branches become competing implementation
+approaches. Each branch runs in its own **clone** of the repo (your original is
+never modified), makes the change, runs the repo's tests (auto-detected:
+pytest / `npm test` / `make test`, or set `REPO_DEFAULT_TEST_COMMAND`), and
+iterates to green. The analyst ranks by *tests-pass + acceptance criteria +
+diff minimality* and the winner's change lands at
+`iter_1/exp_<branch>/change.diff`. The report includes a ready-to-use PR
+description; opening a `gh` PR happens only if you ask.
+
+```
+"improve the repo at ~/code/myproj: make the cache LRU-bounded"
+   │  set_target_repo (clone if URL, detect test command) → repo mode
+   ▼  brief + plan (no literature) ──► ❶ GATE: approve plan
+approach tournament (conservative / novel / minimal) ──► hypotheses.json
+change designer ──► exp_spec.md (per-approach Codex prompts) ──► ❷ GATE: budget
+   ▼
+parallel branches, each a CLONE: make change · run repo tests · outcome.json
+   ──► iter_1/exp_<branch>/change.diff
+   ▼
+analyst ranks (green? acceptance? minimal?) ──► winner
+report (+ PR description) ──► critic reviews the diff ──► change.diff delivered
+```
 
 ## Stack
 
@@ -224,6 +256,7 @@ All settings are env vars (or `.env` entries); defaults in
 | `ORCHESTRATOR_MODEL` / `WORKER_MODEL` | `deepseek/deepseek-chat` | LiteLLM model ids |
 | `CODEX_MODEL` | Codex CLI default | model for experiment runs |
 | `CODEX_TIMEOUT_S` | `3600` | per-run wallclock cap |
+| `REPO_DEFAULT_TEST_COMMAND` | (auto-detect) | fallback test command for repo improvement when none is detected |
 | `SEARCH_TOOLS` | `semantic_scholar,arxiv,openalex,github` | enabled search backends (also available: `openreview`, `web`) |
 | `MAX_LIT_FACETS` | `3` | parallel literature searchers |
 | `MAX_EXPERIMENT_BRANCHES` | `3` | parallel experiment branches |
@@ -234,7 +267,7 @@ All settings are env vars (or `.env` entries); defaults in
 ## Development
 
 ```sh
-uv run pytest          # 53 tests, no API key needed (scripted mock LLM + fake codex binary)
+uv run pytest          # 77 tests, no API key needed (scripted mock LLM + fake codex binary)
 cd ui && npm run build # type-checks the web UI
 ```
 

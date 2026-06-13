@@ -102,3 +102,12 @@ def test_repo_workspace_non_git_source(tmp_path):
     assert (ws / "main.py").exists()
     assert (ws / ".git").is_dir()  # git-init'd so we can still diff
     assert seed_sha(ws) is not None
+
+
+def test_guess_kind_diff():
+    from deep_researcher.storage.catalog import guess_kind
+
+    assert guess_kind("iter_1/exp_main/change.diff") == "diff"
+    assert guess_kind("x.patch") == "diff"
+    assert guess_kind("reports/final_report.md") == "report"
+    assert guess_kind("iter_1/whatever.md") == "other"
