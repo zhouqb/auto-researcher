@@ -104,6 +104,41 @@ def test_repo_workspace_non_git_source(tmp_path):
     assert seed_sha(ws) is not None
 
 
+def test_parallel_clones_share_objects_but_isolate_changes(tmp_path):
+    """Hardlinked --local clones: shared object store, independent refs/trees.
+
+    The disk win worktrees would offer, without sharing a live store across
+    concurrent sandboxed agents.
+    """
+    source = _make_source_repo(tmp_path / "source")
+
+    b1 = tmp_path / "exp_b1" / "repo"
+    b2 = tmp_path / "exp_b2" / "repo"
+    prepare_workspace(b1, source_repo=source, test_command="pytest")
+    prepare_workspace(b2, source_repo=source, test_command="pytest")
+
+    # the seed object is the SAME inode in both clones (hardlinked → no dup)
+    def _seed_object(ws: Path) -> Path:
+        sha = seed_sha(ws)
+        return ws / ".git" / "objects" / sha[:2] / sha[2:]
+
+    o1, o2 = _seed_object(b1), _seed_object(b2)
+    if o1.exists() and o2.exists():  # loose (not packed) → compare inodes
+        assert o1.stat().st_ino == o2.stat().st_ino, "objects should be hardlinked"
+
+    # but a commit in one branch never appears in the other (independent refs)
+    for ws in (b1, b2):
+        _git(ws, "config", "user.email", "t@t.io")
+        _git(ws, "config", "user.name", "t")
+    (b1 / "app.py").write_text("def add(a, b):\n    return a + b + 1\n")
+    _git(b1, "add", "-A")
+    _git(b1, "commit", "-qm", "b1 only")
+
+    assert "b1 only" in _git(b1, "log", "--format=%s")
+    assert "b1 only" not in _git(b2, "log", "--format=%s")
+    assert "+ 1" not in (b2 / "app.py").read_text()
+
+
 def test_guess_kind_diff():
     from deep_researcher.storage.catalog import guess_kind
 

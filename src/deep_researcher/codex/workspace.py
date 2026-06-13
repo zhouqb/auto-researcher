@@ -119,10 +119,14 @@ def _prepare_repo_workspace(
         workspace.rmdir()  # git clone needs a non-existent / empty target
 
     if (source / ".git").is_dir():
-        # --local --no-hardlinks: a real copy (safe to mutate) that still keeps
-        # full history, so `git diff <seed>..HEAD` yields a clean change set.
+        # --local hardlinks the source's immutable objects (git's default for
+        # a local path): branches share history on disk but keep independent
+        # refs, index, and working tree — full isolation, safe to mutate (git
+        # objects are content-addressed and never modified in place; even gc
+        # in one clone only decrements a hardlink count). NOT a worktree: the
+        # whole repo, .git included, stays inside the sandbox's -C workspace.
         subprocess.run(
-            ["git", "clone", "--local", "--no-hardlinks", str(source), str(workspace)],
+            ["git", "clone", "--local", str(source), str(workspace)],
             check=True,
             capture_output=True,
         )
