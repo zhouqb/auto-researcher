@@ -29,6 +29,7 @@ from typing import Any, Optional
 RESULT_MARKER = "result.json"
 EVENTS_FILE = "codex_events.jsonl"
 METRICS_FILE = "metrics.json"
+OUTCOME_FILE = "outcome.json"  # repo-improvement mode's result file
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ class CodexRunResult:
     exit_code: Optional[int] = None
     error: Optional[str] = None
     events_path: Optional[str] = None
+    # repo-improvement mode: project-relative path to the saved change diff
+    change_diff_path: Optional[str] = None
     cached: bool = False
 
 
@@ -206,13 +209,16 @@ async def run_codex(
     if final_message is None and acc.agent_messages:
         final_message = acc.agent_messages[-1]
 
+    # The run's comparable result: outcome.json in repo mode, else metrics.json.
     metrics = None
-    metrics_path = workspace / METRICS_FILE
-    if metrics_path.exists():
-        try:
-            metrics = json.loads(metrics_path.read_text())
-        except json.JSONDecodeError:
-            metrics = {"error": "metrics.json is not valid JSON"}
+    for fname in (OUTCOME_FILE, METRICS_FILE):
+        result_path = workspace / fname
+        if result_path.exists():
+            try:
+                metrics = json.loads(result_path.read_text())
+            except json.JSONDecodeError:
+                metrics = {"error": f"{fname} is not valid JSON"}
+            break
 
     result = CodexRunResult(
         status=status,

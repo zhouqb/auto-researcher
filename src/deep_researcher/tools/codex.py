@@ -13,20 +13,43 @@ import asyncio
 import hashlib
 import json
 import re
+import subprocess
 from datetime import datetime, timezone
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
 from google.adk.tools import ToolContext
 from google.genai import types
 
-from ..codex import CodexRunResult, prepare_workspace, run_codex
+from ..codex import CodexRunResult, prepare_workspace, run_codex, seed_sha
 from ..codex.runner import RESULT_MARKER
 from ..config import get_settings
 from ..notify import notify
 from ..storage.jobs import JobsStore
 
 BUDGET_FILE = "budget/budget.json"
+
+
+def _repo_context(tool_context: ToolContext) -> tuple[Optional[str], Optional[str]]:
+    """(source_repo_path, test_command) from session state; (None, None) in research mode."""
+    state = getattr(tool_context, "state", None) or {}
+    return state.get("target_repo_path"), state.get("repo_test_command")
+
+
+def _compute_change_diff(workspace: Path) -> Optional[str]:
+    """Full change vs the seed commit (committed + uncommitted, scaffolding excluded)."""
+    seed = seed_sha(workspace)
+    if not seed:
+        return None
+    # stage everything (git-excluded scaffolding stays out) so the diff captures
+    # the change whether or not the coding agent committed it.
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=False, capture_output=True)
+    out = subprocess.run(
+        ["git", "diff", "--cached", seed],
+        cwd=workspace, check=False, capture_output=True, text=True,
+    )
+    return out.stdout if out.stdout.strip() else None
 
 
 @lru_cache(maxsize=1)
@@ -82,9 +105,15 @@ async def _run_branch(
     settings = get_settings()
     project_id = _project_id(tool_context)
     branch = _safe_branch(branch_id)
+    source_repo, test_command = _repo_context(tool_context)
     exp_dir = settings.projects_dir / project_id / "iter_1" / f"exp_{branch}"
     workspace = exp_dir / "repo"
-    await asyncio.to_thread(prepare_workspace, workspace)  # git ops off the loop
+    await asyncio.to_thread(  # git ops off the loop
+        prepare_workspace,
+        workspace,
+        Path(source_repo) if source_repo else None,
+        test_command,
+    )
 
     seed = f"{branch}|{task_prompt}|{resume_thread_id or ''}"
     run_id = hashlib.sha1(seed.encode()).hexdigest()[:10]
@@ -130,7 +159,31 @@ async def _run_branch(
             f"Experiment {branch}: {result.status}",
             f"{project_id} · run {run_id} · {result.wallclock_s:.0f}s",
         )
+        if source_repo and result.status == "completed":
+            await _save_change_diff(tool_context, workspace, branch, result)
     return result, run_id
+
+
+async def _save_change_diff(
+    tool_context: ToolContext, workspace: Path, branch: str, result: CodexRunResult
+) -> None:
+    """Save the branch's change vs the seed as iter_1/exp_<branch>/change.diff."""
+    diff = await asyncio.to_thread(_compute_change_diff, workspace)
+    if not diff:
+        return
+    path = f"iter_1/exp_{branch}/change.diff"
+    await tool_context.save_artifact(
+        path,
+        types.Part(text=diff),
+        custom_metadata={
+            "kind": "diff",
+            "title": f"Change diff ({branch})",
+            "summary": f"{diff.count(chr(10))} lines; {len(diff)} chars",
+            "branch": branch,
+            "created_by": tool_context.agent_name,
+        },
+    )
+    result.change_diff_path = path
 
 
 def _budget_entry(branch: str, run_id: str, result: CodexRunResult) -> dict[str, Any]:
@@ -167,7 +220,7 @@ async def _register_run_artifact(
 
 
 def _result_payload(branch: str, run_id: str, result: CodexRunResult) -> dict[str, Any]:
-    return {
+    payload = {
         "branch": branch,
         "status": result.status,
         "run_id": run_id,
@@ -179,6 +232,9 @@ def _result_payload(branch: str, run_id: str, result: CodexRunResult) -> dict[st
         "error": result.error,
         "cached": result.cached,
     }
+    if result.change_diff_path:  # repo-improvement mode
+        payload["change_diff_path"] = result.change_diff_path
+    return payload
 
 
 async def codex_exec(
