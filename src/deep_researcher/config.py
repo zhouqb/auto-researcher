@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     codex_model: Optional[str] = None  # None → Codex CLI default
     codex_timeout_s: float = 3600
 
+    # Repo-improvement mode: fallback test command when none is detected or
+    # given (e.g. a monorepo with a non-standard runner).
+    repo_default_test_command: Optional[str] = None
+
     # Steering knobs (design §4). Default small; escalate only on promise.
     max_clarifying_questions: int = 3
     max_lit_facets: int = 3
