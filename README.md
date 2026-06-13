@@ -47,7 +47,11 @@ parallel Codex experiment branches (sandboxed, killable, budget-metered)
    ──► repo/ · metrics.json · plots/ · run logs
    │
    ▼
-result analyst (cross-branch ranking) ──► analysis.md
+per-branch diagnosis: each branch's OWN Codex session is resumed to explain
+why it worked or not ──► iter_1/exp_<branch>/diagnosis.md
+   │
+   ▼
+result analyst (cross-branch ranking, reads the diagnoses) ──► analysis.md
 experience memory updated (successes AND failures, cross-project)
    │
    ▼
@@ -80,7 +84,9 @@ change designer ──► exp_spec.md (per-approach Codex prompts) ──► ❷
 parallel branches, each a CLONE: make change · run repo tests · outcome.json
    ──► iter_1/exp_<branch>/change.diff
    ▼
-analyst ranks (green? acceptance? minimal?) ──► winner
+per-branch diagnosis (resume each branch's Codex session) ──► diagnosis.md
+   ▼
+analyst ranks (green? acceptance? minimal?), reads diagnoses ──► winner
 report (+ PR description) ──► critic reviews the diff ──► change.diff delivered
 ```
 

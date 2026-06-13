@@ -298,15 +298,23 @@ async def test_repo_improvement_flow(harness, tmp_path, monkeypatch):
     fake = tmp_path / "fake_codex"
     fake.write_text(
         "#!/bin/sh\n"
+        "MODE=exp\n"
         'while [ $# -gt 0 ]; do case "$1" in -C) WS="$2"; shift 2;; '
-        '-o) OUT="$2"; shift 2;; *) shift;; esac; done\n'
+        '-o) OUT="$2"; shift 2;; resume) MODE=analysis; shift;; *) shift;; esac; done\n'
         'echo \'{"type":"thread.started","thread_id":"t-repo-1"}\'\n'
         'echo \'{"type":"turn.completed","usage":{"input_tokens":900,"output_tokens":40}}\'\n'
-        'printf "\\n# improved\\n" >> "$WS/app.py"\n'
-        'echo \'{"approach":"main","changed_files":["app.py"],'
+        'if [ "$MODE" = "analysis" ]; then\n'
+        '  echo \'{"branch":"main","verdict":"success","root_cause":"change was minimal and correct",'
+        '"evidence":["tests green"],"key_factors":["one-line edit"],"next_step":"ship"}\''
+        ' > "$WS/diagnosis.json"\n'
+        '  echo "Diagnosis: tests pass for the right reason." > "$OUT"\n'
+        "else\n"
+        '  printf "\\n# improved\\n" >> "$WS/app.py"\n'
+        '  echo \'{"approach":"main","changed_files":["app.py"],'
         '"tests":{"command":"pytest","passed":1,"total":1,"failures":[],"green":true},'
         '"acceptance_met":true,"summary":"tweak"}\' > "$WS/outcome.json"\n'
-        'echo "changed app.py" > "$OUT"\n'
+        '  echo "changed app.py" > "$OUT"\n'
+        "fi\n"
     )
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("CODEX_BINARY", str(fake))
@@ -332,6 +340,8 @@ async def test_repo_improvement_flow(harness, tmp_path, monkeypatch):
                    decision="approved", comments="go")],
             [_call("codex_exec", task_prompt="Make the change per spec.",
                    branch_id="main")],
+            [_call("analyze_experiment", branch_id="main",
+                   resume_thread_id="t-repo-1")],
             [_call("result_analyst", request="analyze the change")],
             [_text("Change ready; iter_1/exp_main/change.diff")],
         ],
@@ -378,6 +388,18 @@ async def test_repo_improvement_flow(harness, tmp_path, monkeypatch):
     assert "iter_1/exp_main/change.diff" in paths
     diff = catalog.get(project_id="proj-repo", path="iter_1/exp_main/change.diff")
     assert diff.kind == "diff"
+
+    # analyze_experiment resumed the branch's session and wrote a diagnosis
+    analyze = [
+        p.function_response.response
+        for ev in events if ev.content and ev.content.parts
+        for p in ev.content.parts
+        if p.function_response and p.function_response.name == "analyze_experiment"
+    ]
+    assert analyze and analyze[0]["verdict"] == "success"
+    assert "iter_1/exp_main/diagnosis.md" in paths
+    diag = catalog.get(project_id="proj-repo", path="iter_1/exp_main/diagnosis.md")
+    assert diag.kind == "analysis"
 
     # the user's ORIGINAL repo is untouched — the branch worked on a clone
     assert "# improved" not in (source / "app.py").read_text()
