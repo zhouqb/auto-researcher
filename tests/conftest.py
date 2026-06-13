@@ -36,3 +36,6 @@ os.environ.setdefault("LANGFUSE_SECRET_KEY", "")
 # Codex: a test that forgets to install a fake binary fails fast instead of
 # launching a real (paid) Codex run.
 os.environ.setdefault("CODEX_BINARY", "false")
+
+# Repo-improvement mode: no machine-specific fallback test command bleeds in.
+os.environ.setdefault("REPO_DEFAULT_TEST_COMMAND", "")
