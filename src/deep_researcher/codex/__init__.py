@@ -1,5 +1,5 @@
 from .runner import CodexRunResult, ParsedEvents, parse_event_line, read_cached_result, run_codex
-from .workspace import prepare_workspace
+from .workspace import prepare_workspace, seed_sha
 
 __all__ = [
     "CodexRunResult",
@@ -8,4 +8,5 @@ __all__ = [
     "prepare_workspace",
     "read_cached_result",
     "run_codex",
+    "seed_sha",
 ]
