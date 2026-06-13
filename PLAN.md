@@ -196,8 +196,33 @@ catalog from day one. Streamlit steering UI + terminal REPL.
   inside experiment workspaces, Gate 3 mid-run review on async jobs,
   evolution rounds on the tournament
 
+## Phase 5 — Repo-improvement mode ✅ (2026-06-12)
+
+A second request type alongside research: improve an existing repo. Decision:
+**generalize the one pipeline** rather than fork it — the tools carry the mode
+difference, stage-agent prompts get small state-gated blocks, and the
+multi-branch tournament becomes competing implementation approaches. Landed as
+five small PRs (#25–#29):
+
+- [x] `prepare_workspace(source_repo=…)`: seed a branch from an existing repo
+      via `git clone` (history preserved for diffing); code-change contract in
+      a git-excluded `.dr_contract.md`; idempotent `.dr_seeded` guard (#25)
+- [x] `tools/repo.py`: `set_target_repo(path_or_url)` (clones URLs, detects the
+      test command, flips session state to repo mode), scoped
+      `read_repo_file`/`list_repo_tree` (#26)
+- [x] codex tools thread the repo through, emit `iter_1/exp_<branch>/change.diff`
+      (seed..HEAD), and read `outcome.json` in preference to `metrics.json` (#27)
+- [x] orchestrator + stage agents branch on `Mode: {mode?}`; deliverable is the
+      winning diff + a PR description; `gh` PR only on request (#28)
+- [x] `diff` artifact kind, docs, `scripts/live_e2e_repo.py` (#29)
+
+Success signal in repo mode: the repo's own tests + user acceptance criteria.
+Safety: each branch works on a clone, so the user's repo is never mutated by
+experiments.
+
 ## Environment
 
 `~/.env` keys: `DEEPSEEK_API_KEY` (required),
 `SEMANTIC_SCHOLAR_API_KEY` (optional), `OPENALEX_MAILTO` (optional, polite pool),
+`REPO_DEFAULT_TEST_COMMAND` (optional, repo-improvement fallback),
 `DATA_ROOT` (optional, default `~/data/deep-researcher`).
