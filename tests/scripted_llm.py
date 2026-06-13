@@ -37,7 +37,7 @@ def _agent_from_request(llm_request: LlmRequest) -> str:
             return f"lit_searcher_{i}"
     if "synthesize a research team" in si:
         return "lit_synthesizer"
-    if "final research report" in si:
+    if "final deliverable" in si:
         return "report_writer"
     if "code-expressible experiment" in si:
         return "experiment_designer"

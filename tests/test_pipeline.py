@@ -266,3 +266,119 @@ echo "Experiment finished." > "$OUT"
     ws = settings.projects_dir / "proj-exp" / "iter_1/exp_main/repo"
     assert (ws / "AGENTS.md").exists() and (ws / ".git").exists()
     assert all(not q for q in SCRIPTS.values())
+
+
+def _git(cwd, *args):
+    import subprocess
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+async def test_repo_improvement_flow(harness, tmp_path, monkeypatch):
+    """Repo mode end-to-end: set_target_repo → design → gate → codex → diff."""
+    import stat
+
+    runner, catalog, settings = harness
+    await runner.session_service.create_session(
+        app_name=settings.app_name, user_id="local", session_id="proj-repo"
+    )
+
+    # a tiny source repo to improve
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "app.py").write_text("def add(a, b):\n    return a + b\n")
+    _git(source, "init", "-q")
+    _git(source, "config", "user.email", "t@t.io")
+    _git(source, "config", "user.name", "t")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "init")
+
+    # fake codex: edit the seeded clone + write outcome.json (no metrics/plots)
+    fake = tmp_path / "fake_codex"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'while [ $# -gt 0 ]; do case "$1" in -C) WS="$2"; shift 2;; '
+        '-o) OUT="$2"; shift 2;; *) shift;; esac; done\n'
+        'echo \'{"type":"thread.started","thread_id":"t-repo-1"}\'\n'
+        'echo \'{"type":"turn.completed","usage":{"input_tokens":900,"output_tokens":40}}\'\n'
+        'printf "\\n# improved\\n" >> "$WS/app.py"\n'
+        'echo \'{"approach":"main","changed_files":["app.py"],'
+        '"tests":{"command":"pytest","passed":1,"total":1,"failures":[],"green":true},'
+        '"acceptance_met":true,"summary":"tweak"}\' > "$WS/outcome.json"\n'
+        'echo "changed app.py" > "$OUT"\n'
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("CODEX_BINARY", str(fake))
+
+    SCRIPTS.clear()
+    SCRIPTS.update({
+        "orchestrator": [
+            # turn 1: set repo → brief → plan (no facets) → gate 1
+            [_call("set_target_repo", repo=str(source))],
+            [_call("write_artifact", filename="brief/research_brief.md",
+                   content="# Brief\nAdd a comment to app.py.", kind="brief",
+                   title="Brief", summary="change goal")],
+            [_call("save_plan", plan_markdown="# Plan\nSingle-branch change.",
+                   lit_facets=[])],
+            [_text("Plan ready (repo mode, no literature). Approve?")],
+            # turn 2: approve plan → design → gate 2
+            [_call("record_checkpoint", gate="plan_approval",
+                   decision="approved", comments="ok")],
+            [_call("experiment_designer", request="design single branch")],
+            [_text("Spec ready. ~1 min. Approve budget?")],
+            # turn 3: approve budget → run → analyze → done
+            [_call("record_checkpoint", gate="budget_approval",
+                   decision="approved", comments="go")],
+            [_call("codex_exec", task_prompt="Make the change per spec.",
+                   branch_id="main")],
+            [_call("result_analyst", request="analyze the change")],
+            [_text("Change ready; iter_1/exp_main/change.diff")],
+        ],
+        "experiment_designer": [
+            [_call("write_artifact", filename="iter_1/exp_spec.md",
+                   content="# Spec\n## Branch main\n### Codex task prompt\nAdd a comment.",
+                   kind="exp_spec", title="Spec", summary="v0")],
+            [_text("Spec saved; iter_1/exp_spec.md")],
+        ],
+        "result_analyst": [
+            [_call("read_artifact", filename="iter_1/exp_spec.md")],
+            [_call("write_artifact", filename="iter_1/analysis.md",
+                   content="# Analysis\nTests green; change minimal. Ready.",
+                   kind="analysis", title="Analysis", summary="ready")],
+            [_text("Analysis saved; winner: main")],
+        ],
+    })
+
+    # turn 1: repo mode engages
+    await _send(runner, f"improve the repo at {source}", session_id="proj-repo")
+    session = await runner.session_service.get_session(
+        app_name=settings.app_name, user_id="local", session_id="proj-repo"
+    )
+    assert session.state["mode"] == "repo_improvement"
+    assert session.state["target_repo_path"] == str(source.resolve())
+    paths = catalog.list_paths(project_id="proj-repo")
+    assert "brief/target_repo.json" in paths
+
+    await _send(runner, "approve", session_id="proj-repo")
+    events = await _send(runner, "approve budget", session_id="proj-repo")
+
+    # codex_exec ran in repo mode: outcome surfaced + change diff produced
+    responses = [
+        p.function_response.response
+        for ev in events if ev.content and ev.content.parts
+        for p in ev.content.parts
+        if p.function_response and p.function_response.name == "codex_exec"
+    ]
+    assert responses and responses[0]["status"] == "completed"
+    assert responses[0]["metrics"]["acceptance_met"] is True
+    assert responses[0]["change_diff_path"] == "iter_1/exp_main/change.diff"
+
+    paths = catalog.list_paths(project_id="proj-repo")
+    assert "iter_1/exp_main/change.diff" in paths
+    diff = catalog.get(project_id="proj-repo", path="iter_1/exp_main/change.diff")
+    assert diff.kind == "diff"
+
+    # the user's ORIGINAL repo is untouched — the branch worked on a clone
+    assert "# improved" not in (source / "app.py").read_text()
+    assert all(not q for q in SCRIPTS.values())
