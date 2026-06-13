@@ -131,19 +131,20 @@ async def run_codex(
     events_path = run_dir / EVENTS_FILE
     last_msg_path = run_dir / "last_message.txt"
 
+    # `codex exec` and `codex exec resume` have DIFFERENT argument grammars:
+    # resume rejects -s/--sandbox and -C/--cd (it restores the session's cwd and
+    # filters sessions by it). So for resume we set the sandbox via -c config
+    # override and run the subprocess in the workspace (cwd=) instead of -C.
     cmd = [_codex_binary(), "exec"]
-    if resume_thread_id:
-        cmd += ["resume", resume_thread_id]
-    cmd += [
-        "--json",
-        "--sandbox", "workspace-write",
-        "--skip-git-repo-check",
-        "-C", str(workspace),
-        "-o", str(last_msg_path),
-    ]
+    common = ["--json", "--skip-git-repo-check", "-o", str(last_msg_path)]
     if model:
-        cmd += ["--model", model]
-    cmd += [prompt]
+        common += ["--model", model]
+    if resume_thread_id:
+        cmd += ["resume", *common, "-c", 'sandbox_mode="workspace-write"',
+                resume_thread_id, prompt]
+    else:
+        cmd += ["--sandbox", "workspace-write", "-C", str(workspace),
+                *common, prompt]
 
     acc = ParsedEvents()
     t0 = time.time()
@@ -151,6 +152,7 @@ async def run_codex(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        cwd=str(workspace),  # resume has no -C; both modes run inside the workspace
         start_new_session=True,  # own process group → clean kill on timeout
     )
     if on_spawn is not None:

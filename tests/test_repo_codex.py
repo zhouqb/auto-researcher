@@ -109,6 +109,7 @@ def _fake_codex_with_diagnosis(tmp_path: Path, monkeypatch) -> None:
         "MODE=exp\n"
         'while [ $# -gt 0 ]; do case "$1" in -C) WS="$2"; shift 2;; '
         '-o) OUT="$2"; shift 2;; resume) MODE=analysis; shift;; *) shift;; esac; done\n'
+        'WS="${WS:-$PWD}"\n'  # resume passes no -C → codex runs with cwd=workspace
         'echo \'{"type":"thread.started","thread_id":"t-repo"}\'\n'
         'echo \'{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}\'\n'
         'if [ "$MODE" = "analysis" ]; then\n'

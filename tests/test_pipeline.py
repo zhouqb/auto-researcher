@@ -301,6 +301,7 @@ async def test_repo_improvement_flow(harness, tmp_path, monkeypatch):
         "MODE=exp\n"
         'while [ $# -gt 0 ]; do case "$1" in -C) WS="$2"; shift 2;; '
         '-o) OUT="$2"; shift 2;; resume) MODE=analysis; shift;; *) shift;; esac; done\n'
+        'WS="${WS:-$PWD}"\n'  # resume passes no -C → codex runs with cwd=workspace
         'echo \'{"type":"thread.started","thread_id":"t-repo-1"}\'\n'
         'echo \'{"type":"turn.completed","usage":{"input_tokens":900,"output_tokens":40}}\'\n'
         'if [ "$MODE" = "analysis" ]; then\n'

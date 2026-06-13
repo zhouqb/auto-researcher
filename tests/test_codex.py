@@ -100,6 +100,31 @@ echo "All done." > "$OUT"
     assert counter.read_text().count("run") == 1
 
 
+async def test_run_codex_resume_uses_resume_grammar(tmp_path):
+    """`codex exec resume` rejects -s/--sandbox and -C/--cd; the runner must
+    use the resume grammar and run inside the workspace (cwd) instead."""
+    argv_log = tmp_path / "argv"
+    ws = tmp_path / "ws"
+    _fake_codex(tmp_path, f"""
+: > {argv_log}
+for a in "$@"; do printf '%s\\n' "$a" >> {argv_log}; done
+echo cwd-here > marker.txt   # no -C on resume → must be cwd=workspace
+echo '{{"type":"thread.started","thread_id":"t-z"}}'
+echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}'
+""")
+    result = await run_codex(
+        workspace=ws, prompt="diagnose it",
+        run_dir=tmp_path / "runs" / "rr", run_id="rr",
+        resume_thread_id="t-prev-session",
+    )
+    assert result.status == "completed"
+    argv = argv_log.read_text().splitlines()
+    assert "resume" in argv and "t-prev-session" in argv
+    assert "--sandbox" not in argv and "-C" not in argv  # rejected by resume
+    assert 'sandbox_mode="workspace-write"' in argv  # passed via -c instead
+    assert (ws / "marker.txt").read_text().strip() == "cwd-here"  # ran in workspace
+
+
 async def test_run_codex_failure(tmp_path):
     _fake_codex(tmp_path, """
 echo '{"type":"thread.started","thread_id":"t-fail"}'
