@@ -93,6 +93,8 @@ async def main() -> None:
     proj = settings.projects_dir / PROJECT
     diffs = list(proj.glob("iter_1/exp_*/change.diff"))
     non_empty_diff = any(d.read_text().strip() for d in diffs)
+    diagnoses = list(proj.glob("iter_1/exp_*/diagnosis.md"))
+    diagnosed = any(d.read_text().strip() for d in diagnoses)
     # the user's original repo must be untouched
     original_unchanged = "NotImplementedError" in (repo / "mathlib.py").read_text()
 
@@ -101,6 +103,7 @@ async def main() -> None:
         "exp_spec": (proj / "iter_1/exp_spec.md").exists(),
         "completed_run_with_outcome": ok_run,
         "change_diff_produced": non_empty_diff,
+        "experiment_diagnosed": diagnosed,
         "analysis": (proj / "iter_1/analysis.md").exists(),
         "report": (proj / "reports/final_report.md").exists(),
         "original_repo_untouched": original_unchanged,

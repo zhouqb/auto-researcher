@@ -24,11 +24,39 @@ from google.genai import types
 
 from ..codex import CodexRunResult, prepare_workspace, run_codex, seed_sha
 from ..codex.runner import RESULT_MARKER
+from ..codex.workspace import DIAGNOSIS_FILE
 from ..config import get_settings
 from ..notify import notify
 from ..storage.jobs import JobsStore
 
 BUDGET_FILE = "budget/budget.json"
+
+# A diagnosis turn resumes the branch's own Codex session (it already has the
+# full implementation context: every command, test output, and edit). It must
+# investigate WITHOUT changing code — only diagnosis.json (git-excluded) is
+# written, so the branch's change.diff stays clean.
+_ANALYSIS_PROMPT = """\
+You just implemented an experiment in this workspace. Now act as a skeptical \
+reviewer of your own work and diagnose WHY it turned out the way it did. Do NOT \
+modify any source file and do NOT commit.
+
+1. Establish the outcome from the evidence you already have: re-read your result \
+   file (outcome.json for a repo change, metrics.json for a research \
+   experiment); re-run the test/experiment command ONCE if it helps confirm. \
+   Decide the verdict: success | failure | underperformed | inconclusive.
+2. Find the DECISIVE root cause — the single factor that best explains the \
+   outcome. Cite concrete evidence: the specific failing test + error, the \
+   metric vs baseline, the key line(s) you changed, or the assumption that \
+   broke. Separate the root cause from incidental symptoms.
+3. Name the single most promising next step (a fix to try, a stronger baseline, \
+   a confound to control).
+4. Write your diagnosis to `diagnosis.json` at the workspace root — it is \
+   git-excluded, so do NOT commit it, and do NOT edit any other file:
+   {"branch": "<id>", "verdict": "...", "root_cause": "<1-2 sentences>",
+    "evidence": ["..."], "key_factors": ["..."], "next_step": "..."}
+
+Finish with a 4-6 sentence plain-language summary. If the outcome is genuinely \
+ambiguous, say so (verdict "inconclusive") — never fabricate a clean story."""
 
 
 def _repo_context(tool_context: ToolContext) -> tuple[Optional[str], Optional[str]]:
@@ -66,6 +94,11 @@ def _project_id(tool_context: ToolContext) -> str:
     return tool_context.session.id
 
 
+def _branch_workspace(project_id: str, branch: str) -> Path:
+    """Deterministic path to a branch's persistent Codex workspace."""
+    return get_settings().projects_dir / project_id / "iter_1" / f"exp_{branch}" / "repo"
+
+
 async def _update_budget(
     tool_context: ToolContext, entries: list[dict[str, Any]]
 ) -> dict[str, int]:
@@ -100,8 +133,14 @@ async def _run_branch(
     task_prompt: str,
     branch_id: str,
     resume_thread_id: Optional[str] = None,
+    is_analysis: bool = False,
 ) -> tuple[CodexRunResult, str]:
-    """Run one branch's Codex turn; returns (result, run_id)."""
+    """Run one branch's Codex turn; returns (result, run_id).
+
+    ``is_analysis`` marks a post-run diagnosis turn: it resumes the branch's
+    session but must not alter the recorded change, so the change.diff save is
+    skipped (the diagnosis writes only git-excluded diagnosis.json).
+    """
     settings = get_settings()
     project_id = _project_id(tool_context)
     branch = _safe_branch(branch_id)
@@ -159,7 +198,7 @@ async def _run_branch(
             f"Experiment {branch}: {result.status}",
             f"{project_id} · run {run_id} · {result.wallclock_s:.0f}s",
         )
-        if source_repo and result.status == "completed":
+        if source_repo and result.status == "completed" and not is_analysis:
             await _save_change_diff(tool_context, workspace, branch, result)
     return result, run_id
 
@@ -186,12 +225,15 @@ async def _save_change_diff(
     result.change_diff_path = path
 
 
-def _budget_entry(branch: str, run_id: str, result: CodexRunResult) -> dict[str, Any]:
+def _budget_entry(
+    branch: str, run_id: str, result: CodexRunResult, kind: str = "experiment"
+) -> dict[str, Any]:
     return {
         "run_id": run_id,
         "thread_id": result.thread_id,
         "branch": branch,
         "iteration": 1,
+        "kind": kind,  # "experiment" | "analysis"
         "status": result.status,
         "usage": result.usage,
         "wallclock_s": result.wallclock_s,
@@ -334,4 +376,89 @@ async def run_experiments(
             for result, run_id, branch in outcomes
         ],
         "budget_totals": budget_totals,
+    }
+
+
+async def _save_diagnosis(
+    tool_context: ToolContext, branch: str, result: CodexRunResult
+) -> dict[str, Any]:
+    """Read the analysis turn's diagnosis.json (fallback: final message) and
+    save it as iter_1/exp_<branch>/diagnosis.md. Returns {verdict, root_cause}."""
+    workspace = _branch_workspace(_project_id(tool_context), branch)
+    diag_path = workspace / DIAGNOSIS_FILE
+    verdict, root_cause = None, None
+    if diag_path.exists():
+        body = await asyncio.to_thread(diag_path.read_text)
+        try:
+            parsed = json.loads(body)
+            verdict = parsed.get("verdict")
+            root_cause = parsed.get("root_cause")
+        except json.JSONDecodeError:
+            pass
+        content = f"```json\n{body.strip()}\n```\n"
+        if result.final_message:
+            content += f"\n## Summary\n\n{result.final_message}\n"
+    elif result.final_message:
+        content = result.final_message  # no structured file → keep the prose
+    else:
+        return {"verdict": None, "root_cause": None, "diagnosis_path": None}
+
+    path = f"iter_1/exp_{branch}/diagnosis.md"
+    await tool_context.save_artifact(
+        path,
+        types.Part(text=content),
+        custom_metadata={
+            "kind": "analysis",
+            "title": f"Diagnosis ({branch})",
+            "summary": (root_cause or result.final_message or "diagnosis")[:200],
+            "branch": branch,
+            "created_by": tool_context.agent_name,
+        },
+    )
+    return {"verdict": verdict, "root_cause": root_cause, "diagnosis_path": path}
+
+
+async def analyze_experiment(
+    branch_id: str,
+    resume_thread_id: str,
+    tool_context: ToolContext,
+) -> dict[str, Any]:
+    """Diagnose WHY one experiment branch worked or not, by resuming its Codex session.
+
+    Call this AFTER a branch's run completes (before result_analyst), once per
+    branch. It resumes the branch's own Codex thread — inheriting the full
+    implementation context (commands, test output, edits) — and asks it to
+    diagnose the outcome WITHOUT changing code, writing a root-cause analysis to
+    iter_1/exp_<branch_id>/diagnosis.md. Idempotent and budgeted like any run.
+
+    Args:
+        branch_id: The branch to diagnose, e.g. "main", "B1".
+        resume_thread_id: That branch's thread_id (from its run result) — the
+            session to resume. Required; without it there is no context to reuse.
+
+    Returns:
+        {branch, status, run_id, thread_id, verdict, root_cause,
+         diagnosis_path, budget_totals, cached}
+    """
+    if not resume_thread_id:
+        return {"error": "resume_thread_id is required to reuse the branch's session"}
+    result, run_id = await _run_branch(
+        tool_context, _ANALYSIS_PROMPT, branch_id, resume_thread_id, is_analysis=True
+    )
+    branch = _safe_branch(branch_id)
+    budget_totals: dict[str, int] = {}
+    if not result.cached:
+        budget_totals = await _update_budget(
+            tool_context, [_budget_entry(branch, run_id, result, kind="analysis")]
+        )
+        await _register_run_artifact(tool_context, branch, run_id, result)
+    diagnosis = await _save_diagnosis(tool_context, branch, result)
+    return {
+        "branch": branch,
+        "status": result.status,
+        "run_id": run_id,
+        "thread_id": result.thread_id,
+        "budget_totals": budget_totals,
+        "cached": result.cached,
+        **diagnosis,
     }

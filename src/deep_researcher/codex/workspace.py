@@ -46,7 +46,8 @@ You are implementing one research experiment inside this workspace.
 SEED_MARKER = ".dr_seeded"  # holds the seed commit SHA; also the idempotency guard
 CONTRACT_FILE = ".dr_contract.md"
 OUTCOME_FILE = "outcome.json"
-_SCAFFOLD = (SEED_MARKER, CONTRACT_FILE, OUTCOME_FILE)
+DIAGNOSIS_FILE = "diagnosis.json"  # written by the post-run analyzer turn
+_SCAFFOLD = (SEED_MARKER, CONTRACT_FILE, OUTCOME_FILE, DIAGNOSIS_FILE)
 
 _CODE_CONTRACT = """\
 # Code-change experiment contract

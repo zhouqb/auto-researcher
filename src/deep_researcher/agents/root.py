@@ -39,7 +39,7 @@ from ..tools import (
     update_board,
     write_artifact,
 )
-from ..tools.codex import codex_exec, run_experiments
+from ..tools.codex import analyze_experiment, codex_exec, run_experiments
 from ..tools.registry import parse_search_tools, search_tool_fns, search_tool_guide
 
 _TOOL_DISCIPLINE = (
@@ -279,10 +279,10 @@ def _build_result_analyst(model: LiteLlm) -> LlmAgent:
         name="result_analyst",
         model=model,
         description=(
-            "Analyzes completed Codex experiment run(s): reads run results "
-            "and metrics across branches, ranks them, writes "
-            "'iter_1/analysis.md'. Input: the branch run_ids and a one-line "
-            "request."
+            "Analyzes completed Codex experiment run(s): reads run results, "
+            "metrics, and each branch's root-cause diagnosis, ranks them across "
+            "branches, writes 'iter_1/analysis.md'. Input: the branch run_ids "
+            "and a one-line request."
         ),
         disallow_transfer_to_parent=True,
         disallow_transfer_to_peers=True,
@@ -299,9 +299,14 @@ Steps ({_TOOL_DISCIPLINE}):
    repo mode the result's metrics field is the branch's outcome.json (tests,
    acceptance_met, changed_files); the change itself is
    'iter_1/exp_<branch>/change.diff' — read it to judge quality.
+   Also read_artifact each branch's 'iter_1/exp_<branch>/diagnosis.md' — the
+   implementing agent's own root-cause diagnosis of why that branch worked or
+   not (verdict, root cause, key factors). Weigh it in your ranking and use it
+   to corroborate or challenge the raw numbers, not to replace your judgment.
 3. Save with write_artifact to 'iter_1/analysis.md' (kind 'analysis'):
-   what ran per branch; a comparison table; ranking that prunes buggy/failed
-   branches and identifies the best.
+   what ran per branch; a comparison table (include each branch's diagnosed
+   root cause); ranking that prunes buggy/failed branches and identifies the
+   best.
    - RESEARCH: rank on the shared metric (vs baseline, delta, variance across
      seeds); validity concerns (confounds, tiny data, single seed, metric
      mismatch); per-branch verdict supported / not supported / inconclusive.
@@ -445,6 +450,7 @@ def build_root_agent() -> LlmAgent:
             ),
             codex_exec,
             run_experiments,
+            analyze_experiment,
             AgentTool(_build_result_analyst(worker_model)),
             AgentTool(_build_report_writer(worker_model)),
             AgentTool(_build_critic(worker_model)),
@@ -525,15 +531,22 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
       with branch_id=<branch> and resume_thread_id=<thread_id> and concise
       fix instructions. If it fails again, append_decision recording the
       failure and treat the branch as pruned (a failed branch is a finding).
-   f. Call result_analyst (list every branch and run_id in your request),
-      then present its comparison/ranking summary. If it recommends refining
-      the winning branch and budget allows, you may run one refinement via
-      codex_exec (branch_id=<winner>, resume_thread_id=<its thread_id>)
-      — but ask the user first if it needs meaningfully more budget.
-   g. Call record_experience ONCE PER BRANCH with that branch's hypothesis,
+   f. DIAGNOSE — call analyze_experiment(branch_id, resume_thread_id) ONCE PER
+      BRANCH that ran (successes included), using that branch's thread_id from
+      its run result. This resumes the branch's own Codex session — which holds
+      the full implementation context — to diagnose WHY it worked or not,
+      writing iter_1/exp_<branch>/diagnosis.md. The budget is covered by Gate 2.
+   g. Call result_analyst (list every branch and run_id in your request),
+      then present its comparison/ranking summary. It reads the per-branch
+      diagnoses from (f), so its ranking reflects the root causes. If it
+      recommends refining the winning branch and budget allows, you may run one
+      refinement via codex_exec (branch_id=<winner>,
+      resume_thread_id=<its thread_id>) — but ask the user first if it needs
+      meaningfully more budget.
+   h. Call record_experience ONCE PER BRANCH with that branch's hypothesis,
       outcome (success / failure / inconclusive / aborted), concrete
-      lessons, method, result, and codex thread_id. Failures and
-      inconclusive runs are the most valuable memory.
+      lessons (draw on the branch's diagnosis), method, result, and codex
+      thread_id. Failures and inconclusive runs are the most valuable memory.
 
 7. REPORT. Call report_writer.
 

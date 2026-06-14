@@ -8,6 +8,7 @@ from pathlib import Path
 from deep_researcher.codex import prepare_workspace, seed_sha
 from deep_researcher.codex.workspace import (
     CONTRACT_FILE,
+    DIAGNOSIS_FILE,
     OUTCOME_FILE,
     SEED_MARKER,
 )
@@ -66,8 +67,10 @@ def test_scaffolding_is_git_excluded(tmp_path):
     _git(ws, "config", "user.email", "t@t.io")
     _git(ws, "config", "user.name", "t")
 
-    # simulate the coding agent writing outcome.json then committing everything
+    # simulate the coding agent writing outcome.json (+ a later diagnosis turn
+    # writing diagnosis.json) then committing everything
     (ws / OUTCOME_FILE).write_text('{"green": true}')
+    (ws / DIAGNOSIS_FILE).write_text('{"verdict": "success"}')
     (ws / "app.py").write_text("def add(a, b):\n    return a + b + 0\n")
     _git(ws, "add", "-A")
     _git(ws, "commit", "-qm", "change")
@@ -75,7 +78,7 @@ def test_scaffolding_is_git_excluded(tmp_path):
     committed = _git(ws, "show", "--name-only", "--format=", "HEAD").split()
     # the real change is committed; none of our scaffolding is
     assert "app.py" in committed
-    for scaffold in (OUTCOME_FILE, CONTRACT_FILE, SEED_MARKER):
+    for scaffold in (OUTCOME_FILE, DIAGNOSIS_FILE, CONTRACT_FILE, SEED_MARKER):
         assert scaffold not in committed
     # status is clean (excludes hide the untracked sidecars)
     assert _git(ws, "status", "--porcelain") == ""
