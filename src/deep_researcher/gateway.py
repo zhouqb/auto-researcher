@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 from collections import defaultdict
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -35,6 +37,29 @@ from .runner import (
 )
 from .storage import ArtifactCatalog, LocalArtifactService
 from .storage.jobs import TERMINAL, JobsStore
+
+logger = logging.getLogger(__name__)
+
+
+def _purge_tree(path: Path) -> list[str]:
+    """Remove a directory tree, returning the paths that could NOT be removed.
+
+    Unlike ``shutil.rmtree(..., ignore_errors=True)``, which silently swallows
+    failures and lets a partial delete report success, this logs every failure
+    and returns the residue so the caller can surface it (e.g. a Codex run still
+    holding a file mid-teardown leaves a half-deleted project we want to know
+    about, not hide).
+    """
+    if not path.exists():
+        return []
+    residue: list[str] = []
+
+    def _onexc(_func: Any, p: str, exc: BaseException) -> None:
+        residue.append(str(p))
+        logger.warning("delete_project: could not remove %s: %s", p, exc)
+
+    shutil.rmtree(path, onexc=_onexc)
+    return residue
 
 
 def create_gateway() -> FastAPI:
@@ -146,10 +171,20 @@ def create_gateway() -> FastAPI:
         artifacts_deleted = catalog.delete_project(project_id)
         jobs.delete_project(project_id)
         api.state.resume_locks.pop(project_id, None)
-        await asyncio.to_thread(
-            shutil.rmtree, settings.projects_dir / project_id, True
+        residue = await asyncio.to_thread(
+            _purge_tree, settings.projects_dir / project_id
         )
-        return {"deleted": project_id, "artifacts_deleted": artifacts_deleted}
+        result: dict[str, Any] = {
+            "deleted": project_id, "artifacts_deleted": artifacts_deleted
+        }
+        if residue:
+            logger.error(
+                "delete_project %s: %d path(s) left on disk after delete",
+                project_id, len(residue),
+            )
+            result["incomplete"] = True
+            result["residual_paths"] = residue
+        return result
 
     @api.get("/api/projects/{project_id}/history")
     async def history(project_id: str) -> list[dict[str, Any]]:
