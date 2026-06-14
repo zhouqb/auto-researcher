@@ -227,3 +227,27 @@ def test_delete_project_removes_everything(client):
 
     # second delete: project no longer exists
     assert c.delete(f"/api/projects/{pid}").status_code == 404
+
+
+def test_delete_project_surfaces_undeletable_residue(client, monkeypatch):
+    """A file that can't be removed must be reported, not silently swallowed."""
+    import deep_researcher.gateway as gw
+
+    c, settings = client
+    pid = c.post("/api/projects", json={"question": "Sticky?"}).json()["id"]
+    proj_dir = settings.projects_dir / pid
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    (proj_dir / "busy.txt").write_text("held open by a live run")
+
+    stuck = str(proj_dir / "busy.txt")
+
+    def _fake_rmtree(path, *, onexc):  # simulate an unremovable file
+        onexc(None, stuck, OSError("Device or resource busy"))
+
+    monkeypatch.setattr(gw.shutil, "rmtree", _fake_rmtree)
+
+    body = c.delete(f"/api/projects/{pid}").json()
+    # the metadata delete still succeeds, but the residue is surfaced
+    assert body["deleted"] == pid
+    assert body["incomplete"] is True
+    assert stuck in body["residual_paths"]
