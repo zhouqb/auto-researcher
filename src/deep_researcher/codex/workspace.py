@@ -47,7 +47,18 @@ SEED_MARKER = ".dr_seeded"  # holds the seed commit SHA; also the idempotency gu
 CONTRACT_FILE = ".dr_contract.md"
 OUTCOME_FILE = "outcome.json"
 DIAGNOSIS_FILE = "diagnosis.json"  # written by the post-run analyzer turn
-_SCAFFOLD = (SEED_MARKER, CONTRACT_FILE, OUTCOME_FILE, DIAGNOSIS_FILE)
+LANGFUSE_SKILL = ".dr_langfuse.py"  # trace-lookup helper (installed when keys set)
+_SKILL_SRC = Path(__file__).parent / "skills" / "langfuse_traces.py"
+_SCAFFOLD = (SEED_MARKER, CONTRACT_FILE, OUTCOME_FILE, DIAGNOSIS_FILE, LANGFUSE_SKILL)
+
+_LANGFUSE_NOTE = """
+## Root-cause tracing (optional)
+A `.dr_langfuse.py` helper is available. To inspect WHY specific eval cases
+failed (the agent's real LLM prompts/outputs and tool calls), run:
+  python .dr_langfuse.py --failed            # recent failed cases + links
+  python .dr_langfuse.py --case <case_id>    # one case's full trajectory
+Pair it with the eval's `eval/out/*/cases.jsonl` dump for diagnosis.
+"""
 
 _CODE_CONTRACT = """\
 # Code-change experiment contract
@@ -139,13 +150,27 @@ def _prepare_repo_workspace(
 
     seed_sha = _git_out(workspace, "rev-parse", "HEAD")
     _exclude_scaffold(workspace)
-    (workspace / CONTRACT_FILE).write_text(
-        _CODE_CONTRACT.format(
-            test_command=test_command
-            or "(detect and run the repo's own test suite)"
-        )
+    contract = _CODE_CONTRACT.format(
+        test_command=test_command or "(detect and run the repo's own test suite)"
     )
+    if _install_langfuse_skill(workspace):
+        contract += _LANGFUSE_NOTE
+    (workspace / CONTRACT_FILE).write_text(contract)
     (workspace / SEED_MARKER).write_text((seed_sha or "") + "\n")
+
+
+def _install_langfuse_skill(workspace: Path) -> bool:
+    """Copy the Langfuse trace-lookup helper into the workspace when Langfuse
+    keys are configured (git-excluded). Returns whether it was installed."""
+    from ..config import get_settings
+
+    settings = get_settings()
+    if not (settings.langfuse_public_key and settings.langfuse_secret_key):
+        return False
+    if _SKILL_SRC.exists():
+        shutil.copyfile(_SKILL_SRC, workspace / LANGFUSE_SKILL)
+        return True
+    return False
 
 
 def _exclude_scaffold(workspace: Path) -> None:
