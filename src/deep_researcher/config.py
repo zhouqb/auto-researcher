@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     # given (e.g. a monorepo with a non-standard runner).
     repo_default_test_command: Optional[str] = None
 
+    # Repo-improvement with a METRIC objective (design §A4): when set, each
+    # experiment branch runs this command after its change to score itself; the
+    # command must write metrics.json (the objective) at the repo root, and
+    # branches are ranked by `objective_metric` rather than test pass/fail.
+    repo_eval_command: Optional[str] = None
+    objective_metric: str = "execution_accuracy"
+    # Comma-separated dirs to symlink from the target repo's working tree into
+    # each branch clone (e.g. large, gitignored datasets the eval needs). Linked
+    # (not copied) and git-excluded so they never bloat clones or the diff.
+    repo_data_links: str = ""
+
     # Steering knobs (design §4). Default small; escalate only on promise.
     max_clarifying_questions: int = 3
     max_lit_facets: int = 3

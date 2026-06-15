@@ -90,15 +90,56 @@ AGENTS.md, lint/test config) still apply — follow them.
   outcome.json (`"green": false`).
 """
 
+# Used instead of _CODE_CONTRACT when the branch optimizes a METRIC: the eval
+# command writes metrics.json (the objective), so the branch is ranked by it
+# rather than by tests. We deliberately do NOT ask for outcome.json — the run
+# result is metrics.json (see codex/runner.py result precedence).
+_EVAL_CONTRACT = """\
+# Code-change experiment contract (metric objective)
+
+You are implementing ONE approach to IMPROVE a metric in this working copy of an
+existing repository. The repo's own conventions (README, AGENTS.md, lint/test
+config) still apply — follow them.
+
+## Contract (mandatory)
+- Make the change. Keep it focused: touch only what improving the metric needs.
+- Score your change by running the evaluation command — it writes `metrics.json`
+  at the repo root (your objective; do NOT hand-write it):
+  {eval_command}
+- You are judged by `metrics.json` "value" — HIGHER IS BETTER ({objective_metric}).
+  Read `eval/out/*/cases.jsonl` to see which cases failed and why, then iterate
+  to raise the metric. Re-run the eval after each change.
+- Commit your code change with git (`git add -A && git commit`). metrics.json,
+  the eval output, and any linked data dirs are git-excluded — do not commit them.
+
+## Forbidden
+- Fabricating numbers — `metrics.json` must come from running the eval command.
+- Touching files unrelated to the change; network access unless the task says so.
+"""
+
 
 def prepare_workspace(
     workspace: Path,
     source_repo: Optional[Path] = None,
     test_command: Optional[str] = None,
+    *,
+    eval_command: Optional[str] = None,
+    objective_metric: str = "execution_accuracy",
+    link_paths: Optional[list[str]] = None,
 ) -> None:
-    """Idempotent workspace setup; greenfield unless ``source_repo`` is given."""
+    """Idempotent workspace setup; greenfield unless ``source_repo`` is given.
+
+    ``eval_command`` switches the repo contract to metric-objective mode (the
+    branch is ranked by the metrics.json the command writes). ``link_paths`` are
+    dirs symlinked from the source working tree into the clone (e.g. gitignored
+    datasets the eval needs) — linked, not copied, and git-excluded.
+    """
     if source_repo is not None:
-        _prepare_repo_workspace(workspace, Path(source_repo), test_command)
+        _prepare_repo_workspace(
+            workspace, Path(source_repo), test_command,
+            eval_command=eval_command, objective_metric=objective_metric,
+            link_paths=link_paths,
+        )
     else:
         _prepare_research_workspace(workspace)
 
@@ -117,7 +158,10 @@ def _prepare_research_workspace(workspace: Path) -> None:
 
 
 def _prepare_repo_workspace(
-    workspace: Path, source_repo: Path, test_command: Optional[str]
+    workspace: Path, source_repo: Path, test_command: Optional[str],
+    *, eval_command: Optional[str] = None,
+    objective_metric: str = "execution_accuracy",
+    link_paths: Optional[list[str]] = None,
 ) -> None:
     """Seed from an existing repo; idempotent (a seeded workspace is left alone)."""
     if (workspace / SEED_MARKER).exists():
@@ -149,14 +193,46 @@ def _prepare_repo_workspace(
         _git(workspace, "commit", "-qm", "seed workspace from source")
 
     seed_sha = _git_out(workspace, "rev-parse", "HEAD")
-    _exclude_scaffold(workspace)
-    contract = _CODE_CONTRACT.format(
-        test_command=test_command or "(detect and run the repo's own test suite)"
-    )
+
+    # Symlink datasets etc. from the source working tree (linked, not copied);
+    # exclude them — and metrics.json in eval mode — so they never enter the diff.
+    linked = _link_paths(workspace, source_repo, link_paths or [])
+    extra_excludes = list(linked) + (["metrics.json"] if eval_command else [])
+    _exclude_scaffold(workspace, extra=extra_excludes)
+    if eval_command:
+        # .git/info/exclude only hides UNtracked paths; if the repo already
+        # tracks metrics.json, skip-worktree keeps the eval's overwrite out of
+        # `git add -A` (so it never lands in the seed..HEAD change diff).
+        _ignore_tracked_file(workspace, "metrics.json")
+
+    if eval_command:
+        contract = _EVAL_CONTRACT.format(
+            eval_command=eval_command, objective_metric=objective_metric
+        )
+    else:
+        contract = _CODE_CONTRACT.format(
+            test_command=test_command or "(detect and run the repo's own test suite)"
+        )
     if _install_langfuse_skill(workspace):
         contract += _LANGFUSE_NOTE
     (workspace / CONTRACT_FILE).write_text(contract)
     (workspace / SEED_MARKER).write_text((seed_sha or "") + "\n")
+
+
+def _link_paths(workspace: Path, source_repo: Path, names: list[str]) -> list[str]:
+    """Symlink each existing source/<name> into workspace/<name>; return the
+    names actually linked (so they can be git-excluded)."""
+    linked: list[str] = []
+    source = source_repo.expanduser().resolve()
+    for name in names:
+        src = source / name
+        dst = workspace / name
+        if not src.exists() or dst.exists():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.symlink_to(src, target_is_directory=src.is_dir())
+        linked.append(name)
+    return linked
 
 
 def _install_langfuse_skill(workspace: Path) -> bool:
@@ -173,13 +249,14 @@ def _install_langfuse_skill(workspace: Path) -> bool:
     return False
 
 
-def _exclude_scaffold(workspace: Path) -> None:
+def _exclude_scaffold(workspace: Path, extra: Optional[list[str]] = None) -> None:
     """Hide our sidecar files from git so they stay out of commits and diffs."""
     info = workspace / ".git" / "info"
     info.mkdir(parents=True, exist_ok=True)
     exclude = info / "exclude"
     existing = exclude.read_text() if exclude.exists() else ""
-    additions = [name for name in _SCAFFOLD if name not in existing]
+    names = list(_SCAFFOLD) + list(extra or [])
+    additions = [name for name in names if name not in existing]
     if additions:
         body = (existing.rstrip() + "\n" if existing.strip() else "") + "\n".join(
             additions
@@ -193,6 +270,13 @@ def seed_sha(workspace: Path) -> Optional[str]:
     if marker.exists():
         return marker.read_text().strip() or None
     return None
+
+
+def _ignore_tracked_file(workspace: Path, name: str) -> None:
+    """If ``name`` is tracked, mark it skip-worktree so local rewrites (e.g. the
+    eval's metrics.json) are not staged by `git add -A`. No-op if untracked."""
+    if _git_out(workspace, "ls-files", "--", name):
+        _git(workspace, "update-index", "--skip-worktree", name)
 
 
 def _git(workspace: Path, *args: str) -> None:

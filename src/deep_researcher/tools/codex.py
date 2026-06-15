@@ -150,11 +150,16 @@ async def _run_branch(
     source_repo, test_command = _repo_context(tool_context)
     exp_dir = settings.projects_dir / project_id / "iter_1" / f"exp_{branch}"
     workspace = exp_dir / "repo"
+    link_paths = [p.strip() for p in (settings.repo_data_links or "").split(",")
+                  if p.strip()]
     await asyncio.to_thread(  # git ops off the loop
         prepare_workspace,
         workspace,
         Path(source_repo) if source_repo else None,
         test_command,
+        eval_command=settings.repo_eval_command or None,
+        objective_metric=settings.objective_metric,
+        link_paths=link_paths or None,
     )
 
     seed = f"{branch}|{task_prompt}|{resume_thread_id or ''}"
