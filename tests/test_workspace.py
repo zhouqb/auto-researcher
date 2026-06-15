@@ -171,6 +171,71 @@ def test_langfuse_skill_installed_and_excluded_with_keys(tmp_path, monkeypatch):
     assert _git(ws, "status", "--porcelain") == ""
 
 
+def test_eval_objective_contract_links_data_and_excludes_metrics(tmp_path):
+    source = _make_source_repo(tmp_path / "source")
+    # a gitignored-style dataset dir in the source working tree (not committed)
+    (source / "data").mkdir()
+    (source / "data" / "bird.txt").write_text("bird data")
+
+    ws = tmp_path / "exp" / "repo"
+    prepare_workspace(
+        ws, source_repo=source,
+        eval_command="uv run python eval/run_eval.py --tier train --emit-metrics",
+        objective_metric="execution_accuracy", link_paths=["data"],
+    )
+
+    contract = (ws / CONTRACT_FILE).read_text()
+    assert "metric objective" in contract
+    assert "--emit-metrics" in contract and "execution_accuracy" in contract
+
+    # data is symlinked (not copied) and readable through the link
+    assert (ws / "data").is_symlink()
+    assert (ws / "data" / "bird.txt").read_text() == "bird data"
+
+    # the change diff stays clean: metrics.json + linked data are git-excluded
+    _git(ws, "config", "user.email", "t@t.io")
+    _git(ws, "config", "user.name", "t")
+    (ws / "metrics.json").write_text('{"metric": "execution_accuracy", "value": 0.6}')
+    (ws / "app.py").write_text("def add(a, b):\n    return a + b + 1\n")
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-qm", "change")
+    committed = _git(ws, "show", "--name-only", "--format=", "HEAD").split()
+    assert "app.py" in committed
+    assert "metrics.json" not in committed
+    assert "data" not in committed
+    assert _git(ws, "status", "--porcelain") == ""
+
+
+def test_eval_mode_keeps_tracked_metrics_json_out_of_diff(tmp_path):
+    # a target repo that ALREADY tracks metrics.json: exclude won't hide it,
+    # so eval mode must skip-worktree it to keep the change diff clean
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "app.py").write_text("x = 1\n")
+    (source / "metrics.json").write_text('{"value": 0.0}')
+    _git(source, "init", "-q")
+    _git(source, "config", "user.email", "t@t.io")
+    _git(source, "config", "user.name", "t")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "initial with tracked metrics.json")
+
+    ws = tmp_path / "exp" / "repo"
+    prepare_workspace(ws, source_repo=source,
+                      eval_command="run-eval --emit-metrics", link_paths=[])
+    _git(ws, "config", "user.email", "t@t.io")
+    _git(ws, "config", "user.name", "t")
+
+    # eval overwrites the tracked metrics.json; the real change edits app.py
+    (ws / "metrics.json").write_text('{"value": 0.73}')
+    (ws / "app.py").write_text("x = 2\n")
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-qm", "change")
+
+    committed = _git(ws, "show", "--name-only", "--format=", "HEAD").split()
+    assert "app.py" in committed
+    assert "metrics.json" not in committed  # skip-worktree kept the rewrite out
+
+
 def test_guess_kind_diff():
     from deep_researcher.storage.catalog import guess_kind
 
