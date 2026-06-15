@@ -39,11 +39,24 @@ from ..tools import (
     update_board,
     write_artifact,
 )
-from ..tools.codex import analyze_experiment, codex_exec, run_experiments
+from ..tools.codex import (
+    advance_iteration,
+    analyze_experiment,
+    codex_exec,
+    run_experiments,
+)
 from ..tools.registry import parse_search_tools, search_tool_fns, search_tool_guide
 
 _TOOL_DISCIPLINE = (
     "Call at most ONE tool per response; wait for its result before the next call."
+)
+
+# Multi-iteration loop: artifact paths below use iter_1 (the first iteration).
+# In a metric-optimization loop the orchestrator names a later iteration in its
+# request; when it does, remap every iter_1/ path to that iteration's folder.
+_ITERATION_NOTE = (
+    "Iteration: the paths below use 'iter_1/'. If the request names a different "
+    "iteration N (e.g. 'iteration 3'), use 'iter_<N>/' everywhere instead."
 )
 
 # Repo-improvement mode: stage agents read `Mode: {mode?}` from session state
@@ -192,6 +205,8 @@ Candidates:
 [novel] {{idea_batch_2?}}
 [efficient] {{idea_batch_3?}}
 
+{_ITERATION_NOTE}
+
 1. Merge near-duplicate candidates first (note merges).
 2. Rank by pairwise comparison on: decisiveness of the expected signal,
    validity (confounds, baseline quality), feasibility/cost, and novelty.
@@ -243,6 +258,8 @@ def _build_experiment_designer(model: LiteLlm, github_enabled: bool) -> LlmAgent
 
 Mode: {{mode?}}   Repo test command: {{repo_test_command?}}
 
+{_ITERATION_NOTE}
+
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'brief/research_brief.md', then 'plan/plan.md', then
    'lit/synthesis.md'; if your request names ranked candidates, also
@@ -292,6 +309,8 @@ def _build_result_analyst(model: LiteLlm) -> LlmAgent:
 
 Mode: {{mode?}}
 
+{_ITERATION_NOTE}
+
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'iter_1/exp_spec.md'.
 2. list_artifacts, then read_artifact each run result named in your request
@@ -336,6 +355,8 @@ def _build_report_writer(model: LiteLlm) -> LlmAgent:
         instruction=f"""You write the project's final deliverable.
 
 Mode: {{mode?}}
+
+{_ITERATION_NOTE}
 
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'brief/research_brief.md' (the contract — answer exactly this).
@@ -385,6 +406,8 @@ Your job is to find problems, not to praise.
 
 Mode: {{mode?}}
 
+{_ITERATION_NOTE}
+
 Steps ({_TOOL_DISCIPLINE}):
 1. read_artifact 'reports/final_report.md'.
 2. read_artifact 'iter_1/analysis.md' and 'iter_1/exp_spec.md' if they exist
@@ -422,6 +445,10 @@ def build_root_agent() -> LlmAgent:
         model=settings.worker_model, max_tokens=settings.model_max_tokens
     )
     search_names = parse_search_tools(settings.search_tools)
+    target_str = (
+        f"{settings.target_metric_value:g}" if settings.target_metric_value is not None
+        else "the brief's success criterion"
+    )
 
     return LlmAgent(
         name="orchestrator",
@@ -451,6 +478,7 @@ def build_root_agent() -> LlmAgent:
             codex_exec,
             run_experiments,
             analyze_experiment,
+            advance_iteration,
             AgentTool(_build_result_analyst(worker_model)),
             AgentTool(_build_report_writer(worker_model)),
             AgentTool(_build_critic(worker_model)),
@@ -508,7 +536,11 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
    summary (reference 'lit/synthesis.md').
 
 6. EXPERIMENT (in scope per the brief; for repo improvement, the change IS the
-   experiment and this stage is mandatory):
+   experiment and this stage is mandatory). PATHS: every 'iter_1/...' path in
+   this step means the CURRENT iteration — iter_1 the first time through, and
+   iter_<N> after you have called advance_iteration (the Codex tools already
+   write under iter_<N> automatically; you must read the matching iter_<N>
+   artifacts and pass iter_<N> to the stage agents):
    a. Decide breadth: for a simple, well-defined task one branch is right; for
       open tasks with several plausible approaches, run the idea_tournament
       tool and pick the top 2-{settings.max_experiment_branches} ranked
@@ -523,7 +555,8 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
       experiment budget. NEVER call codex_exec or run_experiments without
       it. Once approved: record_checkpoint(gate='budget_approval',
       decision='approved', comments=<user's words>).
-   d. Read 'iter_1/exp_spec.md' for the verbatim Codex task prompts, then:
+   d. Read the current iteration's 'iter_<N>/exp_spec.md' for the verbatim Codex
+      task prompts (iter_1 the first time), then:
       one branch → codex_exec; several branches → run_experiments with
       [{{branch_id, task_prompt}} ...]. Branches run in parallel, each in an
       isolated workspace.
@@ -535,7 +568,7 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
       BRANCH that ran (successes included), using that branch's thread_id from
       its run result. This resumes the branch's own Codex session — which holds
       the full implementation context — to diagnose WHY it worked or not,
-      writing iter_1/exp_<branch>/diagnosis.md. The budget is covered by Gate 2.
+      writing iter_<N>/exp_<branch>/diagnosis.md. The budget is covered by Gate 2.
    g. Call result_analyst (list every branch and run_id in your request),
       then present its comparison/ranking summary. It reads the per-branch
       diagnoses from (f), so its ranking reflects the root causes. If it
@@ -548,15 +581,39 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
       lessons (draw on the branch's diagnosis), method, result, and codex
       thread_id. Failures and inconclusive runs are the most valuable memory.
 
-7. REPORT. Call report_writer.
+7. ITERATE (repo improvement optimizing a metric, e.g. an eval objective; SKIP
+   for research and one-shot changes). The optimization runs over iterations,
+   numbered from 1; track the current iteration N and STATE it. After
+   result_analyst ranks iteration N's branches:
+   a. Read the winning branch's metrics.json "value" — the objective
+      ({settings.objective_metric}). STOP iterating (go to step 8) if it meets
+      the target ({target_str}), OR no branch beat the current baseline, OR
+      N has reached {settings.max_iterations} iterations.
+   b. Otherwise present in chat: the winner + its metric vs the baseline, the
+      decisive root causes from the diagnoses, and a proposed plan for iteration
+      N+1 (2-{settings.max_experiment_branches} concrete approaches grounded in
+      those diagnoses).
+   c. GATE 3 — winner & continue. Ask the user to approve the winner AND the
+      next-iteration plan (or to stop here). NEVER advance without explicit
+      approval. On approval: record_checkpoint(gate='iteration',
+      decision='approved', comments=<user's words>), then call
+      advance_iteration(winner_branch_id) — it commits the winner, makes it the
+      new baseline, and bumps the iteration. Iteration N+1's branches build ON
+      the winner.
+   d. Return to step 6a for iteration N+1. When you call experiment_designer /
+      result_analyst / critic / report_writer, TELL them the iteration number —
+      their artifacts live under iter_<N>/ (iter_1 for the first iteration).
 
-8. CRITIQUE (guardrail). Call critic. If it reports BLOCKING findings, call
-   report_writer once more with the specific fixes required, then re-run
-   critic; surface anything still blocking to the user honestly instead of
-   shipping it. Then give the user the report's conclusions, the critique
-   verdict, and both filenames — and in repo mode, the winning branch's
-   'iter_1/exp_<branch>/change.diff' (the deliverable). Offer to open a PR
-   with `gh` only if the user asks; never push to a remote unprompted.
+8. REPORT. Call report_writer (tell it the final/winning iteration number).
+
+9. CRITIQUE (guardrail). Call critic (tell it the final iteration number). If it
+   reports BLOCKING findings, call report_writer once more with the specific
+   fixes required, then re-run critic; surface anything still blocking to the
+   user honestly instead of shipping it. Then give the user the report's
+   conclusions, the critique verdict, and both filenames — and in repo mode, the
+   winning branch's 'iter_<N>/exp_<branch>/change.diff' (the deliverable). Offer
+   to open a PR with `gh` only if the user asks; never push to a remote
+   unprompted.
 
 Board upkeep: after each stage completes (literature, experiment, analysis,
 report), call update_board moving the corresponding items to 'done' (or
