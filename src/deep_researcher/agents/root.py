@@ -536,7 +536,11 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
    summary (reference 'lit/synthesis.md').
 
 6. EXPERIMENT (in scope per the brief; for repo improvement, the change IS the
-   experiment and this stage is mandatory):
+   experiment and this stage is mandatory). PATHS: every 'iter_1/...' path in
+   this step means the CURRENT iteration — iter_1 the first time through, and
+   iter_<N> after you have called advance_iteration (the Codex tools already
+   write under iter_<N> automatically; you must read the matching iter_<N>
+   artifacts and pass iter_<N> to the stage agents):
    a. Decide breadth: for a simple, well-defined task one branch is right; for
       open tasks with several plausible approaches, run the idea_tournament
       tool and pick the top 2-{settings.max_experiment_branches} ranked
@@ -551,7 +555,8 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
       experiment budget. NEVER call codex_exec or run_experiments without
       it. Once approved: record_checkpoint(gate='budget_approval',
       decision='approved', comments=<user's words>).
-   d. Read 'iter_1/exp_spec.md' for the verbatim Codex task prompts, then:
+   d. Read the current iteration's 'iter_<N>/exp_spec.md' for the verbatim Codex
+      task prompts (iter_1 the first time), then:
       one branch → codex_exec; several branches → run_experiments with
       [{{branch_id, task_prompt}} ...]. Branches run in parallel, each in an
       isolated workspace.
@@ -563,7 +568,7 @@ Workflow — follow strictly, one step at a time ({_TOOL_DISCIPLINE}):
       BRANCH that ran (successes included), using that branch's thread_id from
       its run result. This resumes the branch's own Codex session — which holds
       the full implementation context — to diagnose WHY it worked or not,
-      writing iter_1/exp_<branch>/diagnosis.md. The budget is covered by Gate 2.
+      writing iter_<N>/exp_<branch>/diagnosis.md. The budget is covered by Gate 2.
    g. Call result_analyst (list every branch and run_id in your request),
       then present its comparison/ranking summary. It reads the per-branch
       diagnoses from (f), so its ranking reflects the root causes. If it
