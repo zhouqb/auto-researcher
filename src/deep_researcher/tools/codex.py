@@ -97,9 +97,20 @@ def _project_id(tool_context: ToolContext) -> str:
     return tool_context.session.id
 
 
-def _branch_workspace(project_id: str, branch: str) -> Path:
+def _iteration(tool_context: ToolContext) -> int:
+    """Current optimization iteration from session state (1-based); the
+    orchestrator bumps it via advance_iteration between rounds."""
+    state = getattr(tool_context, "state", None) or {}
+    try:
+        return max(1, int(state.get("iteration", 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _branch_workspace(project_id: str, branch: str, iteration: int = 1) -> Path:
     """Deterministic path to a branch's persistent Codex workspace."""
-    return get_settings().projects_dir / project_id / "iter_1" / f"exp_{branch}" / "repo"
+    return (get_settings().projects_dir / project_id / f"iter_{iteration}"
+            / f"exp_{branch}" / "repo")
 
 
 async def _update_budget(
@@ -146,9 +157,10 @@ async def _run_branch(
     """
     settings = get_settings()
     project_id = _project_id(tool_context)
+    iteration = _iteration(tool_context)
     branch = _safe_branch(branch_id)
     source_repo, test_command = _repo_context(tool_context)
-    exp_dir = settings.projects_dir / project_id / "iter_1" / f"exp_{branch}"
+    exp_dir = settings.projects_dir / project_id / f"iter_{iteration}" / f"exp_{branch}"
     workspace = exp_dir / "repo"
     link_paths = [p.strip() for p in (settings.repo_data_links or "").split(",")
                   if p.strip()]
@@ -162,7 +174,14 @@ async def _run_branch(
         link_paths=link_paths or None,
     )
 
+    # Include the iteration in the run identity so a repeated branch/prompt in a
+    # later iteration gets a distinct run_id — otherwise the jobs table (keyed
+    # <project>:<run_id>) would collide across iterations and a kill/status on
+    # one could be attributed to the other. iter 1 keeps the original seed to
+    # preserve idempotency with any existing run markers.
     seed = f"{branch}|{task_prompt}|{resume_thread_id or ''}"
+    if iteration > 1:
+        seed += f"|iter{iteration}"
     run_id = hashlib.sha1(seed.encode()).hexdigest()[:10]
     run_dir = exp_dir / "runs" / run_id
     if branch == "main" and not (run_dir / RESULT_MARKER).exists():
@@ -207,18 +226,19 @@ async def _run_branch(
             f"{project_id} · run {run_id} · {result.wallclock_s:.0f}s",
         )
         if source_repo and result.status == "completed" and not is_analysis:
-            await _save_change_diff(tool_context, workspace, branch, result)
+            await _save_change_diff(tool_context, workspace, branch, result, iteration)
     return result, run_id
 
 
 async def _save_change_diff(
-    tool_context: ToolContext, workspace: Path, branch: str, result: CodexRunResult
+    tool_context: ToolContext, workspace: Path, branch: str,
+    result: CodexRunResult, iteration: int = 1
 ) -> None:
-    """Save the branch's change vs the seed as iter_1/exp_<branch>/change.diff."""
+    """Save the branch's change vs the seed as iter_<N>/exp_<branch>/change.diff."""
     diff = await asyncio.to_thread(_compute_change_diff, workspace)
     if not diff:
         return
-    path = f"iter_1/exp_{branch}/change.diff"
+    path = f"iter_{iteration}/exp_{branch}/change.diff"
     await tool_context.save_artifact(
         path,
         types.Part(text=diff),
@@ -234,13 +254,14 @@ async def _save_change_diff(
 
 
 def _budget_entry(
-    branch: str, run_id: str, result: CodexRunResult, kind: str = "experiment"
+    branch: str, run_id: str, result: CodexRunResult, kind: str = "experiment",
+    iteration: int = 1,
 ) -> dict[str, Any]:
     return {
         "run_id": run_id,
         "thread_id": result.thread_id,
         "branch": branch,
-        "iteration": 1,
+        "iteration": iteration,
         "kind": kind,  # "experiment" | "analysis"
         "status": result.status,
         "usage": result.usage,
@@ -252,8 +273,9 @@ def _budget_entry(
 async def _register_run_artifact(
     tool_context: ToolContext, branch: str, run_id: str, result: CodexRunResult
 ) -> None:
+    iteration = _iteration(tool_context)
     await tool_context.save_artifact(
-        f"iter_1/exp_{branch}/runs/{run_id}/result.json",
+        f"iter_{iteration}/exp_{branch}/runs/{run_id}/result.json",
         types.Part(text=json.dumps(
             {k: v for k, v in result.__dict__.items() if k != "cached"}, indent=2
         )),
@@ -263,7 +285,7 @@ async def _register_run_artifact(
             "summary": f"{result.status}; metrics: {json.dumps(result.metrics)[:200]}",
             "run_id": run_id,
             "branch": branch,
-            "iteration": 1,
+            "iteration": iteration,
             "created_by": tool_context.agent_name,
         },
     )
@@ -296,7 +318,7 @@ async def codex_exec(
     """Execute ONE code-experiment branch with Codex in a sandboxed workspace.
 
     Call this AFTER the user approved the experiment budget (Gate 2). Each
-    branch has a persistent workspace at iter_1/exp_<branch_id>/repo; pass
+    branch has a persistent workspace at iter_<N>/exp_<branch_id>/repo; pass
     resume_thread_id (from a previous result) to continue that branch's Codex
     conversation with full context — preferred when debugging a failed run.
     For several independent branches, use run_experiments instead.
@@ -319,7 +341,8 @@ async def codex_exec(
     budget_totals: dict[str, int] = {}
     if not result.cached:
         budget_totals = await _update_budget(
-            tool_context, [_budget_entry(branch, run_id, result)]
+            tool_context,
+            [_budget_entry(branch, run_id, result, iteration=_iteration(tool_context))],
         )
         await _register_run_artifact(tool_context, branch, run_id, result)
     payload = _result_payload(branch, run_id, result)
@@ -368,8 +391,9 @@ async def run_experiments(
 
     outcomes = await asyncio.gather(*(_one(b) for b in branches))
 
+    iteration = _iteration(tool_context)
     entries = [
-        _budget_entry(branch, run_id, result)
+        _budget_entry(branch, run_id, result, iteration=iteration)
         for result, run_id, branch in outcomes
         if not result.cached
     ]
@@ -391,8 +415,9 @@ async def _save_diagnosis(
     tool_context: ToolContext, branch: str, result: CodexRunResult
 ) -> dict[str, Any]:
     """Read the analysis turn's diagnosis.json (fallback: final message) and
-    save it as iter_1/exp_<branch>/diagnosis.md. Returns {verdict, root_cause}."""
-    workspace = _branch_workspace(_project_id(tool_context), branch)
+    save it as iter_<N>/exp_<branch>/diagnosis.md. Returns {verdict, root_cause}."""
+    iteration = _iteration(tool_context)
+    workspace = _branch_workspace(_project_id(tool_context), branch, iteration)
     diag_path = workspace / DIAGNOSIS_FILE
     verdict, root_cause = None, None
     if diag_path.exists():
@@ -411,7 +436,7 @@ async def _save_diagnosis(
     else:
         return {"verdict": None, "root_cause": None, "diagnosis_path": None}
 
-    path = f"iter_1/exp_{branch}/diagnosis.md"
+    path = f"iter_{iteration}/exp_{branch}/diagnosis.md"
     await tool_context.save_artifact(
         path,
         types.Part(text=content),
@@ -437,7 +462,7 @@ async def analyze_experiment(
     branch. It resumes the branch's own Codex thread — inheriting the full
     implementation context (commands, test output, edits) — and asks it to
     diagnose the outcome WITHOUT changing code, writing a root-cause analysis to
-    iter_1/exp_<branch_id>/diagnosis.md. Idempotent and budgeted like any run.
+    iter_<N>/exp_<branch_id>/diagnosis.md. Idempotent and budgeted like any run.
 
     Args:
         branch_id: The branch to diagnose, e.g. "main", "B1".
@@ -457,7 +482,9 @@ async def analyze_experiment(
     budget_totals: dict[str, int] = {}
     if not result.cached:
         budget_totals = await _update_budget(
-            tool_context, [_budget_entry(branch, run_id, result, kind="analysis")]
+            tool_context,
+            [_budget_entry(branch, run_id, result, kind="analysis",
+                           iteration=_iteration(tool_context))],
         )
         await _register_run_artifact(tool_context, branch, run_id, result)
     diagnosis = await _save_diagnosis(tool_context, branch, result)
@@ -470,3 +497,68 @@ async def analyze_experiment(
         "cached": result.cached,
         **diagnosis,
     }
+
+
+def _commit_all(repo: Path, message: str) -> None:
+    """Commit any pending change (git-excluded scaffolding stays out). Harmless
+    no-op when the tree is already clean."""
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=False, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=auto-researcher@local",
+         "-c", "user.name=auto-researcher", "commit", "-m", message],
+        cwd=repo, check=False, capture_output=True,
+    )
+
+
+async def advance_iteration(
+    winner_branch_id: str, tool_context: ToolContext
+) -> dict[str, Any]:
+    """Carry the winning branch forward as the baseline for the NEXT iteration.
+
+    Call this once per iteration, AFTER the user approves the winner. It commits
+    the winning branch's change, repoints the project at that workspace (so the
+    next iteration's branches clone the winner and build ON it), and bumps the
+    iteration counter. Subsequent run_experiments/analysis then write under
+    iter_<N+1>/ automatically.
+
+    Args:
+        winner_branch_id: The branch chosen by result_analyst / the user.
+
+    Returns:
+        {previous_iteration, new_iteration, baseline_repo, winner} or {error}.
+    """
+    state = getattr(tool_context, "state", None)
+    if state is None:
+        return {"error": "no session state available"}
+    iteration = _iteration(tool_context)
+    winner = _safe_branch(winner_branch_id)
+    winner_repo = _branch_workspace(_project_id(tool_context), winner, iteration)
+    if not (winner_repo / ".git").is_dir():
+        return {"error": f"no workspace for winner '{winner}' at iter_{iteration}"}
+
+    # Commit the winning change so a clone of this repo carries it as the seed.
+    await asyncio.to_thread(_commit_all, winner_repo, f"iter {iteration} winner: {winner}")
+
+    new_iteration = iteration + 1
+    state["iteration"] = new_iteration
+    state["target_repo_path"] = str(winner_repo)
+
+    record = {
+        "previous_iteration": iteration,
+        "new_iteration": new_iteration,
+        "winner": winner,
+        "baseline_repo": str(winner_repo),
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    await tool_context.save_artifact(
+        f"decisions/iter_{iteration}_winner.json",
+        types.Part(text=json.dumps(record, indent=2)),
+        custom_metadata={
+            "kind": "decision",
+            "title": f"Iteration {iteration} winner: {winner}",
+            "summary": f"baseline for iter {new_iteration} → {winner_repo}",
+            "iteration": iteration,
+            "created_by": tool_context.agent_name,
+        },
+    )
+    return record
