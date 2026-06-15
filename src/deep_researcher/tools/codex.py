@@ -174,7 +174,14 @@ async def _run_branch(
         link_paths=link_paths or None,
     )
 
+    # Include the iteration in the run identity so a repeated branch/prompt in a
+    # later iteration gets a distinct run_id — otherwise the jobs table (keyed
+    # <project>:<run_id>) would collide across iterations and a kill/status on
+    # one could be attributed to the other. iter 1 keeps the original seed to
+    # preserve idempotency with any existing run markers.
     seed = f"{branch}|{task_prompt}|{resume_thread_id or ''}"
+    if iteration > 1:
+        seed += f"|iter{iteration}"
     run_id = hashlib.sha1(seed.encode()).hexdigest()[:10]
     run_dir = exp_dir / "runs" / run_id
     if branch == "main" and not (run_dir / RESULT_MARKER).exists():

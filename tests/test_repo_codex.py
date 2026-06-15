@@ -251,3 +251,18 @@ async def test_advance_iteration_unknown_winner_errors(env, monkeypatch, tmp_pat
     out = await codex_tools.advance_iteration("nope", ctx)
     assert "error" in out
     assert ctx.state.get("iteration", 1) == 1  # unchanged
+
+
+async def test_same_branch_prompt_distinct_run_id_across_iterations(
+    env, monkeypatch, tmp_path
+):
+    # the jobs table keys <project>:<run_id>, so a repeated branch+prompt in a
+    # later iteration must NOT reuse the earlier iteration's run_id
+    source = _source_repo(tmp_path / "source")
+    _fake_codex(tmp_path, monkeypatch)
+    ctx = _Ctx(source)
+
+    r1 = await codex_tools.codex_exec("improve add()", ctx, branch_id="B1")
+    ctx.state["iteration"] = 2
+    r2 = await codex_tools.codex_exec("improve add()", ctx, branch_id="B1")
+    assert r1["run_id"] != r2["run_id"]
