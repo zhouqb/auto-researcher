@@ -47,7 +47,10 @@ modify any source file and do NOT commit.
 2. Find the DECISIVE root cause — the single factor that best explains the \
    outcome. Cite concrete evidence: the specific failing test + error, the \
    metric vs baseline, the key line(s) you changed, or the assumption that \
-   broke. Separate the root cause from incidental symptoms.
+   broke. Separate the root cause from incidental symptoms. If a \
+   `.dr_langfuse.py` helper and an `eval/out/*/cases.jsonl` dump exist, use \
+   them to inspect WHY specific cases failed (run `python .dr_langfuse.py \
+   --failed` then `--case <id>` for the agent's real trajectory).
 3. Name the single most promising next step (a fix to try, a stronger baseline, \
    a confound to control).
 4. Write your diagnosis to `diagnosis.json` at the workspace root — it is \

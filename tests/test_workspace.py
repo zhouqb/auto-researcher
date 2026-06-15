@@ -5,10 +5,13 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from types import SimpleNamespace
+
 from deep_researcher.codex import prepare_workspace, seed_sha
 from deep_researcher.codex.workspace import (
     CONTRACT_FILE,
     DIAGNOSIS_FILE,
+    LANGFUSE_SKILL,
     OUTCOME_FILE,
     SEED_MARKER,
 )
@@ -140,6 +143,32 @@ def test_parallel_clones_share_objects_but_isolate_changes(tmp_path):
     assert "b1 only" in _git(b1, "log", "--format=%s")
     assert "b1 only" not in _git(b2, "log", "--format=%s")
     assert "+ 1" not in (b2 / "app.py").read_text()
+
+
+def test_langfuse_skill_absent_without_keys(tmp_path):
+    # conftest neutralizes Langfuse keys, so the helper must not be installed
+    source = _make_source_repo(tmp_path / "source")
+    ws = tmp_path / "exp" / "repo"
+    prepare_workspace(ws, source_repo=source, test_command="pytest")
+    assert not (ws / LANGFUSE_SKILL).exists()
+    assert "dr_langfuse" not in (ws / CONTRACT_FILE).read_text()
+
+
+def test_langfuse_skill_installed_and_excluded_with_keys(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "deep_researcher.config.get_settings",
+        lambda: SimpleNamespace(langfuse_public_key="pk", langfuse_secret_key="sk"),
+    )
+    source = _make_source_repo(tmp_path / "source")
+    ws = tmp_path / "exp" / "repo"
+    prepare_workspace(ws, source_repo=source, test_command="pytest")
+
+    assert (ws / LANGFUSE_SKILL).exists()
+    assert "python .dr_langfuse.py" in (ws / CONTRACT_FILE).read_text()
+    # installed sidecar is git-excluded like the rest of the scaffolding
+    _git(ws, "config", "user.email", "t@t.io")
+    _git(ws, "config", "user.name", "t")
+    assert _git(ws, "status", "--porcelain") == ""
 
 
 def test_guess_kind_diff():
