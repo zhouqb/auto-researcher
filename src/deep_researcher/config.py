@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     max_experiment_branches: int = 3
     max_codex_concurrency: int = 2
 
+    # Multi-iteration optimization loop (design §A5): stop after this many
+    # iterations, or earlier if the objective reaches target_metric_value.
+    max_iterations: int = 5
+    target_metric_value: Optional[float] = None
+
     # Context compaction (design §6): summarize every N events, keep overlap.
     compaction_interval: int = 40
     compaction_overlap: int = 8

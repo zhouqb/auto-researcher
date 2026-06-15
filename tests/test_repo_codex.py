@@ -197,3 +197,57 @@ async def test_research_mode_unaffected(env, monkeypatch, tmp_path):
     assert out["metrics"]["metric"] == "acc"
     assert "change_diff_path" not in out
     assert not any(k.endswith("change.diff") for k in ctx.saved)
+
+
+def test_iteration_helper_reads_and_clamps_state():
+    ctx = pytypes.SimpleNamespace(state={})
+    assert codex_tools._iteration(ctx) == 1
+    ctx.state = {"iteration": 3}
+    assert codex_tools._iteration(ctx) == 3
+    ctx.state = {"iteration": 0}      # clamp to >= 1
+    assert codex_tools._iteration(ctx) == 1
+    ctx.state = {"iteration": "bad"}  # non-int falls back to 1
+    assert codex_tools._iteration(ctx) == 1
+
+
+async def test_second_iteration_writes_under_iter_2(env, monkeypatch, tmp_path):
+    source = _source_repo(tmp_path / "source")
+    _fake_codex(tmp_path, monkeypatch)
+    ctx = _Ctx(source)
+    ctx.state["iteration"] = 2
+
+    out = await codex_tools.codex_exec("improve add()", ctx, branch_id="B1")
+    assert out["change_diff_path"] == "iter_2/exp_B1/change.diff"
+    assert "iter_2/exp_B1/change.diff" in ctx.saved
+    # budget entry records the iteration too
+    ledger = json.loads(ctx.saved["budget/budget.json"])
+    assert ledger["entries"][-1]["iteration"] == 2
+
+
+async def test_advance_iteration_carries_winner_forward(env, monkeypatch, tmp_path):
+    settings, _ = env
+    source = _source_repo(tmp_path / "source")
+    _fake_codex(tmp_path, monkeypatch)
+    ctx = _Ctx(source)
+
+    await codex_tools.codex_exec("improve add()", ctx, branch_id="B1")
+    winner_repo = settings.projects_dir / "proj-repo" / "iter_1" / "exp_B1" / "repo"
+    assert (winner_repo / ".git").is_dir()
+
+    out = await codex_tools.advance_iteration("B1", ctx)
+
+    assert out["new_iteration"] == 2 and out["previous_iteration"] == 1
+    assert ctx.state["iteration"] == 2
+    # next iteration's branches will clone the winner (build ON its change)
+    assert ctx.state["target_repo_path"] == str(winner_repo)
+    # the winning change is committed so the clone seeds from it
+    assert "iter 1 winner: B1" in _git(winner_repo, "log", "--format=%s")
+    assert "decisions/iter_1_winner.json" in ctx.saved
+
+
+async def test_advance_iteration_unknown_winner_errors(env, monkeypatch, tmp_path):
+    source = _source_repo(tmp_path / "source")
+    ctx = _Ctx(source)
+    out = await codex_tools.advance_iteration("nope", ctx)
+    assert "error" in out
+    assert ctx.state.get("iteration", 1) == 1  # unchanged
